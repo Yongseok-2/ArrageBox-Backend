@@ -12,7 +12,7 @@ class TokenExchangeRequest(BaseModel):
     code: str = Field(..., description="Google OAuth2 인가 코드")
     redirect_uri: str | None = Field(
         default=None,
-        description="OAuth 동의 시 사용한 Redirect URI (없으면 credentials.json 기본값 사용)",
+        description="OAuth 동의 시 사용한 Redirect URI (없으면 GOOGLE_REDIRECT_URI 사용)",
     )
 
 

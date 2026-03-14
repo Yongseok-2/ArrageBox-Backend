@@ -1,7 +1,5 @@
-import json
 import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -16,47 +14,23 @@ DEFAULT_SCOPES = f"{GMAIL_SCOPE} {PEOPLE_SCOPE}"
 
 
 class GoogleOAuthService:
-    """Google OAuth 토큰 발급/갱신을 담당하는 서비스"""
+    """Google OAuth 토큰 발급/갱신을 담당하는 서비스."""
 
     def __init__(self) -> None:
-        """OAuth 클라이언트 설정을 초기화한다."""
-        self.credentials_path = Path(
-            os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
-        )
+        """환경변수 기반 OAuth 클라이언트 설정을 초기화한다."""
         self.token_url = os.getenv("GOOGLE_TOKEN_URL", GOOGLE_TOKEN_URL)
         self.auth_url = os.getenv("GOOGLE_AUTH_URL", GOOGLE_AUTH_URL)
-        self.client_id = ""
-        self.client_secret = ""
-        self.redirect_uris: list[str] = []
-        self._load_client_settings()
-
-    def _load_client_settings(self) -> None:
-        """credentials.json 또는 환경변수에서 OAuth 클라이언트 정보를 읽는다."""
-        if self.credentials_path.exists():
-            try:
-                data = json.loads(self.credentials_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Invalid credentials.json: {exc}",
-                ) from exc
-
-            oauth_client = data.get("web") or data.get("installed") or {}
-            self.client_id = oauth_client.get("client_id", "")
-            self.client_secret = oauth_client.get("client_secret", "")
-            self.redirect_uris = oauth_client.get("redirect_uris", [])
-        else:
-            self.client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-            self.client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-            raw_redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "")
-            self.redirect_uris = [raw_redirect_uri] if raw_redirect_uri else []
+        self.client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+        self.client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        raw_redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "")
+        self.redirect_uris: list[str] = [raw_redirect_uri] if raw_redirect_uri else []
 
     def _validate_config(self) -> None:
-        """필수 OAuth 클라이언트 설정 존재 여부를 검증한다."""
+        """필수 OAuth 환경변수 존재 여부를 검증한다."""
         if not self.client_id or not self.client_secret:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Google OAuth client settings are missing. Check credentials.json or env vars.",
+                detail="Google OAuth settings are missing. Check GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.",
             )
 
     def _resolve_redirect_uri(self, redirect_uri: str | None) -> str:
@@ -67,7 +41,7 @@ class GoogleOAuthService:
             return self.redirect_uris[0]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Redirect URI is required. Provide it in request or credentials.json.",
+            detail="Redirect URI is required. Provide it in request or GOOGLE_REDIRECT_URI.",
         )
 
     def build_authorization_url(
@@ -99,7 +73,7 @@ class GoogleOAuthService:
     async def exchange_code_for_tokens(
         self, code: str, redirect_uri: str | None
     ) -> dict[str, Any]:
-        """Authorization code를 access/refresh token으로 교환한다."""
+        """인가 코드를 access/refresh token으로 교환한다."""
         self._validate_config()
         payload = {
             "code": code,
@@ -112,7 +86,7 @@ class GoogleOAuthService:
         return self._append_expiry(token_data, refreshed=False)
 
     async def refresh_access_token(self, refresh_token: str) -> dict[str, Any]:
-        """Refresh token으로 새 access token을 발급받는다."""
+        """refresh token으로 새 access token을 발급받는다."""
         self._validate_config()
         payload = {
             "refresh_token": refresh_token,
