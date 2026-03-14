@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# 1. 커밋 메시지 파일 경로 가져오기
+COMMIT_MSG_FILE=$1
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# 2. 'git commit -m' 사용 금지 체크 (템플릿 미사용 방지)
+# 템플릿의 주석(#)이 포함되어 있는지 확인합니다.
+if ! grep -q "^#" "$COMMIT_MSG_FILE"; then
+    echo "❌ 'git commit -m' 옵션은 사용할 수 없습니다."
+    echo "💡 'git commit' 명령어를 입력하여 템플릿에 맞춰 작성해 주세요."
+    exit 1
+fi
+
+# 3. 주석을 제외한 실제 메시지 본문만 추출
+FILTERED_MSG=$(echo "$COMMIT_MSG" | grep -v '^#')
+
+# 4. 커밋 메시지 패턴 검증
+# 형식: "타입: 설명" (이슈 ID 생략)
+# 예시: feat: 이메일 수집 기능 추가
+PATTERN="^(feat|fix|docs|style|refactor|test|chore): .+"
+
+if ! echo "$FILTERED_MSG" | grep -qE "$PATTERN"; then
+    echo "❌ 잘못된 커밋 메시지 형식입니다."
+    echo "👉 올바른 예시: feat: 이메일 수집 API 구현"
+    echo "👉 허용 타입: feat, fix, docs, style, refactor, test, chore"
+    exit 1
+fi
+
+echo "✅ 커밋 메시지 형식이 확인되었습니다."
