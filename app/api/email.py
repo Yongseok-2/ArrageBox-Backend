@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from email.utils import parseaddr
+
 from fastapi import APIRouter
 
 from app.models.email import (
@@ -23,7 +25,7 @@ router = APIRouter(prefix="/emails", tags=["emails"])
     "/sync",
     response_model=EmailSyncResponse,
     summary="읽지 않은 메일 동기화",
-    description="읽지 않은 메일을 Gmail에서 가져와 Kafka 토픽으로 발행한다.",
+    description="읽지 않은 메일을 Gmail에서 가져와 Kafka 토픽으로 발행합니다.",
 )
 async def sync_unread_emails(payload: EmailSyncRequest) -> EmailSyncResponse:
     """읽지 않은 메일을 Kafka로 발행한다."""
@@ -49,7 +51,7 @@ async def sync_unread_emails(payload: EmailSyncRequest) -> EmailSyncResponse:
     "/triage/preview",
     response_model=TriagePreviewResponse,
     summary="일괄 처리 미리보기",
-    description="안읽음/오래된 메일을 발신자+카테고리로 그룹화해 일괄처리 후보를 반환한다.",
+    description="안읽음/오래된 메일을 발신자 표시명+카테고리로 그룹화해 일괄 처리 후보를 반환합니다.",
 )
 async def preview_triage_groups(payload: TriagePreviewRequest) -> TriagePreviewResponse:
     """일괄 처리 화면용 그룹 데이터를 생성한다."""
@@ -65,15 +67,16 @@ async def preview_triage_groups(payload: TriagePreviewRequest) -> TriagePreviewR
     for bucket, items in [("unread", triage_data["unread"]), ("stale", triage_data["stale"])]:
         for email in items:
             analysis = await email_analyzer.analyze_email(email)
-            sender = _normalize_sender(email.get("from_email", ""))
+            sender_display = _extract_sender_display(email.get("from_email", ""))
+            sender_key = _sender_group_key(email.get("from_email", ""))
             category = analysis["category"]
-            key = (bucket, sender, category)
+            key = (bucket, sender_key, category)
 
             if key not in groups:
                 groups[key] = {
-                    "group_id": f"{bucket}|{sender}|{category}",
+                    "group_id": f"{bucket}|{sender_key}|{category}",
                     "bucket": bucket,
-                    "sender": sender,
+                    "sender": sender_display,
                     "category": category,
                     "count": 0,
                     "confidence_sum": 0.0,
@@ -129,7 +132,7 @@ async def preview_triage_groups(payload: TriagePreviewRequest) -> TriagePreviewR
     "/triage/action",
     response_model=BulkActionResponse,
     summary="일괄 액션 실행",
-    description="프론트에서 선택한 message_ids에 대해 archive 또는 trash를 실행한다.",
+    description="선택한 message_ids에 대해 archive 또는 trash를 실행합니다.",
 )
 async def apply_triage_action(payload: BulkActionRequest) -> BulkActionResponse:
     """선택한 메일에 대해 일괄 보관/삭제를 수행한다."""
@@ -146,15 +149,25 @@ async def apply_triage_action(payload: BulkActionRequest) -> BulkActionResponse:
     )
 
 
-def _normalize_sender(raw_from: str) -> str:
-    """From 헤더에서 발신자 이메일 주소를 정규화한다."""
-    value = (raw_from or "").strip()
-    if "<" in value and ">" in value:
-        start = value.find("<") + 1
-        end = value.find(">", start)
-        if start > 0 and end > start:
-            return value[start:end].strip().lower()
-    return value.lower()
+def _extract_sender_display(raw_from: str) -> str:
+    """From 헤더에서 표시 이름(예: Instagram)을 우선 추출한다."""
+    name, email_addr = parseaddr((raw_from or "").strip())
+    if name:
+        return name.strip()
+    if email_addr:
+        local = email_addr.split("@", 1)[0].strip()
+        return local or email_addr.strip().lower()
+    return (raw_from or "").strip()
+
+
+def _sender_group_key(raw_from: str) -> str:
+    """내부 그룹 식별용 키(가능하면 이메일 주소)를 만든다."""
+    name, email_addr = parseaddr((raw_from or "").strip())
+    if email_addr:
+        return email_addr.strip().lower()
+    if name:
+        return name.strip().lower()
+    return (raw_from or "").strip().lower()
 
 
 def _build_bucket_summary(groups: list[TriageGroupItem]) -> list[BucketSummaryItem]:

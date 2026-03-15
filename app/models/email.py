@@ -26,7 +26,7 @@ class TriagePreviewRequest(BaseModel):
 class TriageGroupItem(BaseModel):
     group_id: str
     bucket: Literal["unread", "stale"]
-    sender: str
+    sender: str = Field(..., description="화면 표시용 발신자명")
     category: str
     count: int
     avg_confidence_score: float = Field(..., ge=0.0, le=1.0)
