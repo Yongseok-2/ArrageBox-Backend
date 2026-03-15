@@ -1,4 +1,5 @@
 import asyncio
+from email.header import decode_header, make_header
 from typing import Any
 
 import httpx
@@ -233,9 +234,22 @@ class GmailService:
         }
 
     @staticmethod
-    def _extract_headers(headers: list[dict[str, str]]) -> dict[str, str]:
-        """Convert Gmail headers array into a dictionary."""
-        return {item.get("name", ""): item.get("value", "") for item in headers}
+    def _decode_mime_header(value: str) -> str:
+        """Decode RFC2047 encoded header text into readable Unicode."""
+        if not value:
+            return ""
+        try:
+            return str(make_header(decode_header(value)))
+        except Exception:
+            return value
+
+    @classmethod
+    def _extract_headers(cls, headers: list[dict[str, str]]) -> dict[str, str]:
+        """Convert Gmail headers array into decoded dictionary."""
+        return {
+            item.get("name", ""): cls._decode_mime_header(item.get("value", ""))
+            for item in headers
+        }
 
 
 gmail_service = GmailService()

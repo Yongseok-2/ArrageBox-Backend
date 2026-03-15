@@ -17,6 +17,22 @@ ALLOWED_CATEGORIES = {
     "other",
 }
 
+SENDER_PRIORS: dict[str, tuple[str, float]] = {
+    "account_noreply@navercorp.com": ("account_security", 0.35),
+    "no-reply@accounts.google.com": ("account_security", 0.35),
+    "verify@twitter.com": ("account_security", 0.30),
+    "mail@musinsa.com": ("shopping_delivery", 0.25),
+    "member-cs@musinsa.com": ("shopping_delivery", 0.25),
+    "noreply@po.atlassian.net": ("work_action", 0.20),
+    "jira@": ("work_action", 0.20),
+    "confluence@": ("work_action", 0.20),
+    "pinterest": ("newsletter_promo", 0.25),
+    "news@": ("newsletter_promo", 0.20),
+    "newsletter": ("newsletter_promo", 0.20),
+    "discord.com": ("social_community", 0.25),
+    "facebookmail.com": ("social_community", 0.25),
+}
+
 
 class EmailAnalyzer:
     """Analyze email category, urgency, and summary."""
@@ -153,49 +169,75 @@ class EmailAnalyzer:
         )
 
     def _classify_category(self, text: str, from_email: str) -> tuple[str, float]:
-        """Classify category and return confidence score."""
-        if any(word in text for word in ["invoice", "receipt", "billing", "payment"]):
-            return ("finance_billing", 0.86)
-        if any(word in text for word in ["meeting", "schedule", "calendar", "action required"]):
-            return ("work_action", 0.83)
-        if any(word in text for word in ["security", "verify", "password", "login alert"]):
-            return ("account_security", 0.86)
-        if any(word in text for word in ["shipping", "delivered", "order", "tracking"]):
-            return ("shopping_delivery", 0.82)
-        if any(word in text for word in ["sale", "discount", "promotion", "unsubscribe"]):
-            return ("newsletter_promo", 0.8)
-        if any(word in from_email for word in ["linkedin", "facebook", "x.com", "discord"]):
-            return ("social_community", 0.77)
-        if any(word in text for word in ["mom", "dad", "family", "friend"]):
-            return ("personal", 0.74)
-        return ("other", 0.45)
+        """Classify category with keyword scores + sender prior."""
+        scores = {category: 0.0 for category in ALLOWED_CATEGORIES}
+
+        keyword_rules: dict[str, list[str]] = {
+            "finance_billing": [
+                "invoice", "receipt", "billing", "payment", "refund", "영수증", "결제", "청구", "환불", "정산",
+            ],
+            "work_action": [
+                "meeting", "schedule", "calendar", "action required", "jira", "confluence", "회의", "일정", "요청", "조치", "승인",
+            ],
+            "account_security": [
+                "security", "verify", "password", "login alert", "authentication", "otp", "인증", "보안", "로그인", "비밀번호", "인증번호", "의심",
+            ],
+            "shopping_delivery": [
+                "shipping", "delivered", "order", "tracking", "주문", "배송", "출고", "택배", "운송장", "구매",
+            ],
+            "newsletter_promo": [
+                "sale", "discount", "promotion", "unsubscribe", "newsletter", "광고", "할인", "이벤트", "뉴스레터", "구독해지",
+            ],
+            "social_community": [
+                "facebook", "discord", "community", "follower", "댓글", "커뮤니티", "알림", "소셜",
+            ],
+            "personal": [
+                "mom", "dad", "family", "friend", "개인", "안부", "지인", "친구", "가족",
+            ],
+        }
+
+        for category, words in keyword_rules.items():
+            for word in words:
+                if word in text:
+                    scores[category] += 0.20
+
+        lowered_sender = from_email.lower()
+        for sender_hint, (category, weight) in SENDER_PRIORS.items():
+            if sender_hint in lowered_sender:
+                scores[category] += weight
+
+        best_category = "other"
+        best_score = 0.0
+        for category, score in scores.items():
+            if category == "other":
+                continue
+            if score > best_score:
+                best_category = category
+                best_score = score
+
+        if best_score < 0.20:
+            return ("other", 0.45)
+
+        confidence = min(0.95, 0.55 + best_score * 0.25)
+        return (best_category, round(confidence, 4))
 
     def _score_urgency(self, text: str) -> int:
         """Compute urgency score between 0 and 100."""
         score = 20
-        if any(word in text for word in ["urgent", "asap", "immediately", "today"]):
-            score += 35
-        if any(word in text for word in ["deadline", "overdue", "final notice"]):
-            score += 30
-        if any(word in text for word in ["action required", "important"]):
-            score += 15
+        urgent_keywords = [
+            "urgent", "asap", "immediately", "today", "deadline", "overdue", "final notice", "action required",
+            "긴급", "즉시", "오늘", "마감", "기한", "지연", "필수 조치",
+        ]
+        for word in urgent_keywords:
+            if word in text:
+                score += 12
         return min(score, 100)
 
     def _extract_keywords(self, text: str) -> list[str]:
         """Extract a small keyword set for UI and filtering."""
         candidate_words = [
-            "invoice",
-            "payment",
-            "meeting",
-            "deadline",
-            "urgent",
-            "promotion",
-            "receipt",
-            "shipping",
-            "security",
-            "verification",
-            "refund",
-            "tracking",
+            "invoice", "payment", "meeting", "deadline", "urgent", "promotion", "receipt", "shipping", "security",
+            "verification", "refund", "tracking", "인증", "보안", "결제", "청구", "배송", "주문", "할인", "이벤트",
         ]
         return [word for word in candidate_words if word in text]
 
