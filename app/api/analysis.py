@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-from fastapi import APIRouter, Query
+﻿from fastapi import APIRouter, Query
 import asyncpg
 
 from app.core.settings import settings
@@ -12,12 +11,15 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
     "/recent",
     response_model=EmailAnalysisListResponse,
     summary="최근 분석 결과 조회",
-    description="DB에 저장된 최근 메일 분석 결과를 최신순으로 조회한다.",
 )
-async def get_recent_analysis(limit: int = Query(default=20, ge=1, le=200)) -> EmailAnalysisListResponse:
-    """최근 분석 결과 목록을 반환한다."""
+async def get_recent_analysis(
+    account_id: str = Query(..., min_length=2, max_length=200),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> EmailAnalysisListResponse:
+    """지정한 account_id의 최근 메일 분석 결과 목록을 반환합니다."""
     query = """
     SELECT
+        a.account_id,
         a.gmail_message_id,
         r.subject,
         r.from_email,
@@ -31,19 +33,21 @@ async def get_recent_analysis(limit: int = Query(default=20, ge=1, le=200)) -> E
         a.analyzed_at
     FROM email_analysis a
     LEFT JOIN emails_raw r ON r.gmail_message_id = a.gmail_message_id
+    WHERE a.account_id = $1
     ORDER BY a.analyzed_at DESC
-    LIMIT $1
+    LIMIT $2
     """
 
     pool = await asyncpg.create_pool(dsn=settings.postgres_dsn, min_size=1, max_size=3)
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query, limit)
+            rows = await conn.fetch(query, account_id, limit)
     finally:
         await pool.close()
 
     items = [
         EmailAnalysisItem(
+            account_id=row["account_id"],
             gmail_message_id=row["gmail_message_id"],
             subject=row["subject"],
             from_email=row["from_email"],

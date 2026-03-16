@@ -1,7 +1,8 @@
-CREATE EXTENSION IF NOT EXISTS vector;
+﻿CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS emails_raw (
     id BIGSERIAL PRIMARY KEY,
+    account_id TEXT NOT NULL DEFAULT 'unknown',
     gmail_message_id TEXT UNIQUE NOT NULL,
     gmail_thread_id TEXT,
     subject TEXT,
@@ -17,8 +18,12 @@ CREATE TABLE IF NOT EXISTS emails_raw (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE emails_raw ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT 'unknown';
+CREATE INDEX IF NOT EXISTS idx_emails_raw_account_id ON emails_raw(account_id);
+
 CREATE TABLE IF NOT EXISTS email_analysis (
     id BIGSERIAL PRIMARY KEY,
+    account_id TEXT NOT NULL DEFAULT 'unknown',
     gmail_message_id TEXT UNIQUE NOT NULL REFERENCES emails_raw(gmail_message_id) ON DELETE CASCADE,
     sender_email TEXT,
     category TEXT NOT NULL,
@@ -32,10 +37,13 @@ CREATE TABLE IF NOT EXISTS email_analysis (
     analyzed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT 'unknown';
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0.0;
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS analysis_source TEXT NOT NULL DEFAULT 'rules';
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS review_required BOOLEAN NOT NULL DEFAULT false;
 
+CREATE INDEX IF NOT EXISTS idx_email_analysis_account_id ON email_analysis(account_id);
+CREATE INDEX IF NOT EXISTS idx_email_analysis_account_id_analyzed_at ON email_analysis(account_id, analyzed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_email_analysis_category ON email_analysis(category);
 CREATE INDEX IF NOT EXISTS idx_email_analysis_urgency ON email_analysis(urgency_score DESC);
 CREATE INDEX IF NOT EXISTS idx_email_analysis_analyzed_at ON email_analysis(analyzed_at DESC);

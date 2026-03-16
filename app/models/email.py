@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-from typing import Literal
+﻿from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class EmailSyncRequest(BaseModel):
     access_token: str = Field(..., description="Google OAuth2 access token")
+    account_id: str = Field(..., min_length=2, max_length=200, description="서비스 내 사용자 식별자(예: Google 이메일)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     max_results: int = Field(default=20, ge=1, le=100, description="읽지 않은 메일 조회 개수")
 
@@ -19,8 +19,15 @@ class EmailSyncResponse(BaseModel):
 class TriagePreviewRequest(BaseModel):
     access_token: str = Field(..., description="Google OAuth2 access token")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
-    max_unread: int = Field(default=100, ge=1, le=500, description="안읽음 메일 최대 조회 수")
+    max_unread: int = Field(default=100, ge=1, le=500, description="읽지 않은 메일 최대 조회 수")
     max_stale: int = Field(default=100, ge=1, le=500, description="6개월 이상 메일 최대 조회 수")
+
+
+class TriagePreviewDbRequest(BaseModel):
+    account_id: str = Field(..., min_length=2, max_length=200, description="조회할 사용자 식별자")
+    max_unread: int = Field(default=100, ge=1, le=500, description="DB unread 메일 최대 조회 수")
+    max_stale: int = Field(default=100, ge=1, le=500, description="DB stale 메일 최대 조회 수")
+    stale_months: int = Field(default=6, ge=1, le=36, description="stale 판정 기준 개월 수")
 
 
 class TriageGroupItem(BaseModel):
@@ -56,6 +63,7 @@ class TriagePreviewResponse(BaseModel):
 
 class BulkActionRequest(BaseModel):
     access_token: str = Field(..., description="Google OAuth2 access token")
+    account_id: str = Field(..., min_length=2, max_length=200, description="서비스 내 사용자 식별자(예: Google 이메일)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     action: Literal["archive", "trash"]
     message_ids: list[str] = Field(..., min_length=1, max_length=5000, description="일괄 처리할 Gmail message ID 목록")

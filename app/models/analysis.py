@@ -1,9 +1,10 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from pydantic import BaseModel, Field
 
 
 class EmailAnalysisItem(BaseModel):
+    account_id: str
     gmail_message_id: str
     subject: str | None = None
     from_email: str | None = None
@@ -19,4 +20,4 @@ class EmailAnalysisItem(BaseModel):
 
 class EmailAnalysisListResponse(BaseModel):
     items: list[EmailAnalysisItem]
-    count: int
+    count: int
