@@ -34,8 +34,8 @@ class GmailService:
         max_stale: int = 100,
     ) -> dict[str, list[dict[str, Any]]]:
         """Fetch unread and stale buckets for triage."""
-        unread_query = "is:unread -in:trash -in:spam"
-        stale_query = "older_than:6m -is:unread -in:trash -in:spam"
+        unread_query = "is:unread -in:trash -in:spam -is:starred -label:important -has:userlabels"
+        stale_query = "older_than:6m -is:unread -in:trash -in:spam -is:starred -label:important -has:userlabels"
 
         headers = {"Authorization": f"Bearer {access_token}"}
         async with httpx.AsyncClient(timeout=20) as client:
@@ -253,3 +253,4 @@ class GmailService:
 
 
 gmail_service = GmailService()
+
