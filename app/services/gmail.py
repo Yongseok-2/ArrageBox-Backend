@@ -1,4 +1,5 @@
-import asyncio
+﻿import asyncio
+from email.header import decode_header, make_header
 from typing import Any
 
 import httpx
@@ -104,8 +105,38 @@ class GmailService:
             "failed_ids": failed_ids,
         }
 
+    async def apply_label_updates(
+        self,
+        access_token: str,
+        user_id: str,
+        message_ids: list[str],
+        add_label_ids: list[str],
+        remove_label_ids: list[str],
+    ) -> dict[str, Any]:
+        """Apply Gmail label updates in chunks and return processed/failed IDs."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        url = f"{GMAIL_API_BASE}/users/{user_id}/messages/batchModify"
+
+        failed_ids: list[str] = []
+        chunks = [message_ids[i : i + 1000] for i in range(0, len(message_ids), 1000)]
+        async with httpx.AsyncClient(timeout=20) as client:
+            for chunk in chunks:
+                payload = {
+                    "ids": chunk,
+                    "addLabelIds": add_label_ids,
+                    "removeLabelIds": remove_label_ids,
+                }
+                response = await client.post(url, headers=headers, json=payload)
+                if response.status_code >= 400:
+                    failed_ids.extend(chunk)
+
+        return {
+            "processed_count": len(message_ids) - len(failed_ids),
+            "failed_ids": failed_ids,
+        }
+
     async def _batch_archive(self, access_token: str, user_id: str, message_ids: list[str]) -> None:
-        """Archive messages by removing INBOX label in chunks."""
+        """메일의 별표를 표시하여 중요도를 표시합니다."""
         headers = {"Authorization": f"Bearer {access_token}"}
         url = f"{GMAIL_API_BASE}/users/{user_id}/messages/batchModify"
 
@@ -114,7 +145,7 @@ class GmailService:
             for chunk in chunks:
                 payload = {
                     "ids": chunk,
-                    "removeLabelIds": ["INBOX"],
+                    "addLabelIds": ["STARRED"],
                 }
                 response = await client.post(url, headers=headers, json=payload)
                 if response.status_code >= 400:
@@ -233,9 +264,22 @@ class GmailService:
         }
 
     @staticmethod
-    def _extract_headers(headers: list[dict[str, str]]) -> dict[str, str]:
-        """Convert Gmail headers array into a dictionary."""
-        return {item.get("name", ""): item.get("value", "") for item in headers}
+    def _decode_mime_header(value: str) -> str:
+        """Decode RFC2047 encoded header text into readable Unicode."""
+        if not value:
+            return ""
+        try:
+            return str(make_header(decode_header(value)))
+        except Exception:
+            return value
+
+    @classmethod
+    def _extract_headers(cls, headers: list[dict[str, str]]) -> dict[str, str]:
+        """Convert Gmail headers array into decoded dictionary."""
+        return {
+            item.get("name", ""): cls._decode_mime_header(item.get("value", ""))
+            for item in headers
+        }
 
 
 gmail_service = GmailService()

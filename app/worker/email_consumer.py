@@ -12,6 +12,7 @@ from app.services.email_analyzer import email_analyzer
 
 INSERT_RAW_SQL = """
 INSERT INTO emails_raw (
+    account_id,
     gmail_message_id,
     gmail_thread_id,
     subject,
@@ -25,10 +26,11 @@ INSERT INTO emails_raw (
     processed_at
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12
 )
 ON CONFLICT (gmail_message_id)
 DO UPDATE SET
+    account_id = EXCLUDED.account_id,
     gmail_thread_id = EXCLUDED.gmail_thread_id,
     subject = EXCLUDED.subject,
     from_email = EXCLUDED.from_email,
@@ -43,6 +45,7 @@ DO UPDATE SET
 
 INSERT_ANALYSIS_SQL = """
 INSERT INTO email_analysis (
+    account_id,
     gmail_message_id,
     sender_email,
     category,
@@ -56,10 +59,11 @@ INSERT INTO email_analysis (
     analyzed_at
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12
 )
 ON CONFLICT (gmail_message_id)
 DO UPDATE SET
+    account_id = EXCLUDED.account_id,
     sender_email = EXCLUDED.sender_email,
     category = EXCLUDED.category,
     urgency_score = EXCLUDED.urgency_score,
@@ -84,11 +88,18 @@ def safe_deserialize(value: bytes) -> dict[str, Any] | None:
         return None
 
 
+def has_valid_account_id(email_payload: dict[str, Any]) -> bool:
+    """멀티 사용자 분리를 위해 유효한 account_id 여부를 확인합니다."""
+    account_id = str(email_payload.get("account_id", "")).strip()
+    return bool(account_id and account_id != "unknown")
+
+
 async def save_email(pool: asyncpg.Pool, email: dict[str, Any]) -> None:
     """Save or update raw email payload."""
     async with pool.acquire() as conn:
         await conn.execute(
             INSERT_RAW_SQL,
+            email.get("account_id"),
             email.get("gmail_message_id"),
             email.get("gmail_thread_id"),
             email.get("subject"),
@@ -103,11 +114,16 @@ async def save_email(pool: asyncpg.Pool, email: dict[str, Any]) -> None:
         )
 
 
-async def save_email_analysis(pool: asyncpg.Pool, analysis: dict[str, Any]) -> None:
+async def save_email_analysis(
+    pool: asyncpg.Pool,
+    account_id: str,
+    analysis: dict[str, Any],
+) -> None:
     """Save or update email analysis result."""
     async with pool.acquire() as conn:
         await conn.execute(
             INSERT_ANALYSIS_SQL,
+            account_id,
             analysis["gmail_message_id"],
             analysis.get("sender_email"),
             analysis["category"],
@@ -139,9 +155,13 @@ async def run_consumer() -> None:
             email_payload = msg.value
             if not email_payload:
                 continue
+            if not has_valid_account_id(email_payload):
+                logger.warning("Skip payload without valid account_id")
+                continue
+            account_id = str(email_payload.get("account_id", "")).strip()
             await save_email(pool, email_payload)
             analysis_payload = await email_analyzer.analyze_email(email_payload)
-            await save_email_analysis(pool, analysis_payload)
+            await save_email_analysis(pool, account_id=account_id, analysis=analysis_payload)
     finally:
         await consumer.stop()
         await pool.close()
