@@ -157,3 +157,16 @@ async def ensure_google_token(
     )
     _set_auth_cookies(response, token_data)
     return _to_public_token_response(token_data)
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="????")
+async def logout(response: Response) -> None:
+    """인증 쿠키를 삭제하여 로그아웃 처리를 수행합니다."""
+    cookie_common = {"path": "/"}
+    if settings.auth_cookie_domain:
+        cookie_common["domain"] = settings.auth_cookie_domain
+
+    response.delete_cookie(key=settings.auth_access_cookie_name, **cookie_common)
+    response.delete_cookie(key=settings.auth_refresh_cookie_name, **cookie_common)
+    response.delete_cookie(key=settings.auth_expires_cookie_name, **cookie_common)
+
+    return None
