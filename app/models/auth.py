@@ -12,24 +12,21 @@ class TokenExchangeRequest(BaseModel):
     code: str = Field(..., description="Google OAuth2 인가 코드")
     redirect_uri: str | None = Field(
         default=None,
-        description="OAuth 동의 시 사용한 Redirect URI (없으면 GOOGLE_REDIRECT_URI 사용)",
+        description="OAuth 인증 시 사용된 Redirect URI (생략 시 GOOGLE_REDIRECT_URI 설정값 사용)",
     )
 
 
 class TokenRefreshRequest(BaseModel):
-    refresh_token: str = Field(..., description="Google OAuth2 refresh token")
+    refresh_token: str | None = Field(
+        default=None,
+        description="Google OAuth2 리프레시 토큰 (생략 시 HttpOnly 쿠키 값 사용)",
+    )
 
 
-class GoogleTokenResponse(BaseModel):
-    access_token: str
+class ManagedGoogleTokenResponse(BaseModel):
     expires_in: int
     scope: str | None = None
     token_type: str
-    refresh_token: str | None = None
-    id_token: str | None = None
-
-
-class ManagedGoogleTokenResponse(GoogleTokenResponse):
     expires_at: datetime
     refreshed: bool = False
 
@@ -37,10 +34,13 @@ class ManagedGoogleTokenResponse(GoogleTokenResponse):
 class EnsureTokenRequest(BaseModel):
     access_token: str | None = Field(
         default=None,
-        description="현재 access token (있는 경우)",
+        description="현재 액세스 토큰 (생략 시 HttpOnly 쿠키 값 사용)",
     )
-    refresh_token: str = Field(..., description="Google OAuth2 refresh token")
+    refresh_token: str | None = Field(
+        default=None,
+        description="Google OAuth2 리프레시 토큰 (생략 시 HttpOnly 쿠키 값 사용)",
+    )
     expires_at: datetime | None = Field(
         default=None,
-        description="access token 만료 시각(ISO-8601, UTC 권장)",
+        description="액세스 토큰 만료 일시 (ISO-8601, UTC 기준, 생략 시 쿠키 값 확인)",
     )

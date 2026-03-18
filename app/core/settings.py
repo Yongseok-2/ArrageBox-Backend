@@ -21,6 +21,16 @@ class Settings:
     analysis_confidence_threshold: float = float(
         os.getenv("ANALYSIS_CONFIDENCE_THRESHOLD", "0.72")
     )
+    auth_access_cookie_name: str = os.getenv("AUTH_ACCESS_COOKIE_NAME", "g_access_token")
+    auth_refresh_cookie_name: str = os.getenv("AUTH_REFRESH_COOKIE_NAME", "g_refresh_token")
+    auth_expires_cookie_name: str = os.getenv("AUTH_EXPIRES_COOKIE_NAME", "g_expires_at")
+    auth_cookie_secure: bool = os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
+    auth_cookie_samesite: str = os.getenv("AUTH_COOKIE_SAMESITE", "none")
+    auth_cookie_domain: str | None = os.getenv("AUTH_COOKIE_DOMAIN") or None
+    auth_access_cookie_max_age: int = int(os.getenv("AUTH_ACCESS_COOKIE_MAX_AGE", "3600"))
+    auth_refresh_cookie_max_age: int = int(
+        os.getenv("AUTH_REFRESH_COOKIE_MAX_AGE", str(60 * 60 * 24 * 30))
+    )
 
 
 settings = Settings()
