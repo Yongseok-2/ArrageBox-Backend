@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.analysis import router as analysis_router
 from app.api.auth import router as auth_router
@@ -35,6 +36,21 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(email_router)
 app.include_router(analysis_router)
+
+# 허용할 Origin(출처) 목록 정의
+origins = [
+    "http://localhost:5173",  # 리액트 개발 서버 포트
+    "http://127.0.0.1:5173",
+]
+
+# CORSMiddleware 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,             # 허용할 도메인 목록
+    allow_credentials=True,            # 쿠키나 인증 헤더 허용 여부 (OAuth에 필수!)
+    allow_methods=["*"],               # 모든 HTTP 메서드(GET, POST 등) 허용
+    allow_headers=["*"],               # 모든 HTTP 헤더 허용
+)
 
 
 @app.get("/health", summary="헬스체크")
