@@ -8,6 +8,7 @@ from app.api.analysis import router as analysis_router
 from app.api.auth import router as auth_router
 from app.api.email import router as email_router
 from app.core.db import close_db_pool, init_db_pool
+from app.core.redis_store import redis_temp_body_store
 from app.services.kafka_producer import kafka_email_producer
 
 
@@ -17,13 +18,15 @@ async def lifespan(_: FastAPI):
     await init_db_pool()
     try:
         await kafka_email_producer.start()
+        await redis_temp_body_store.ping()
     except Exception:
-        # Kafka가 불가해도 인증 API는 동작하도록 유지
+        # Kafka나 Redis가 불가해도 인증 API는 동작하도록 유지
         pass
     try:
         yield
     finally:
         await kafka_email_producer.stop()
+        await redis_temp_body_store.close()
         await close_db_pool()
 
 

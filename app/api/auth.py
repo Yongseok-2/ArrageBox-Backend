@@ -7,6 +7,7 @@ from app.core.settings import settings
 from app.models.auth import (
     EnsureTokenRequest,
     GoogleAuthorizeResponse,
+    LogoutResponse,
     ManagedGoogleTokenResponse,
     TokenExchangeRequest,
     TokenRefreshRequest,
@@ -75,7 +76,6 @@ async def get_google_authorization_url(
     redirect_uri: str | None = Query(default=None),
     state: str | None = Query(default=None),
 ) -> GoogleAuthorizeResponse:
-    """Google OAuth2 인증을 위한 URL을 생성하여 반환합니다."""
     auth_url = google_oauth_service.build_authorization_url(
         redirect_uri=redirect_uri,
         state=state,
@@ -87,13 +87,12 @@ async def get_google_authorization_url(
     "/google/token",
     response_model=ManagedGoogleTokenResponse,
     summary="인증 코드로 토큰 발급",
-    description="Google 인가 코드(authorization code)를 사용해 토큰을 발급받고 HttpOnly 쿠키에 저장합니다.",
+    description="Google authorization code로 토큰을 발급하고 HttpOnly 쿠키에 저장합니다.",
 )
 async def exchange_google_token(
     payload: TokenExchangeRequest,
     response: Response,
 ) -> ManagedGoogleTokenResponse:
-    """인가 코드를 통해 액세스 토큰과 리프레시 토큰을 교환합니다."""
     token_data = await google_oauth_service.exchange_code_for_tokens(
         code=payload.code,
         redirect_uri=payload.redirect_uri,
@@ -106,14 +105,13 @@ async def exchange_google_token(
     "/google/refresh",
     response_model=ManagedGoogleTokenResponse,
     summary="Access Token 갱신",
-    description="Refresh Token을 사용하여 새로운 Access Token을 발급받고 HttpOnly 쿠키에 저장합니다.",
+    description="Refresh token으로 새 access token을 발급하고 HttpOnly 쿠키를 갱신합니다.",
 )
 async def refresh_google_token(
     response: Response,
     payload: TokenRefreshRequest = Body(default_factory=TokenRefreshRequest),
     refresh_cookie: str | None = Cookie(default=None, alias=settings.auth_refresh_cookie_name),
 ) -> ManagedGoogleTokenResponse:
-    """Refresh Token을 사용하여 Access Token을 갱신합니다."""
     refresh_token = payload.refresh_token or refresh_cookie
     if not refresh_token:
         raise HTTPException(
@@ -130,7 +128,7 @@ async def refresh_google_token(
     "/google/token/ensure",
     response_model=ManagedGoogleTokenResponse,
     summary="유효한 토큰 보장",
-    description="현재 토큰의 만료 여부를 확인하고, 만료되었거나 만료가 임박한 경우 자동으로 갱신하여 반환합니다.",
+    description="쿠키 또는 요청 본문의 토큰을 검사해 만료 시 자동으로 갱신합니다.",
 )
 async def ensure_google_token(
     response: Response,
@@ -139,7 +137,6 @@ async def ensure_google_token(
     refresh_cookie: str | None = Cookie(default=None, alias=settings.auth_refresh_cookie_name),
     expires_cookie: str | None = Cookie(default=None, alias=settings.auth_expires_cookie_name),
 ) -> ManagedGoogleTokenResponse:
-    """토큰의 유효성을 검증하고 필요시 갱신된 토큰을 제공합니다."""
     access_token = payload.access_token or access_cookie
     refresh_token = payload.refresh_token or refresh_cookie
     expires_at = payload.expires_at or _parse_expires_at(expires_cookie)
@@ -158,9 +155,15 @@ async def ensure_google_token(
     _set_auth_cookies(response, token_data)
     return _to_public_token_response(token_data)
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, summary="????")
-async def logout(response: Response) -> None:
-    """인증 쿠키를 삭제하여 로그아웃 처리를 수행합니다."""
+
+@router.post(
+    "/logout",
+    response_model=LogoutResponse,
+    status_code=status.HTTP_200_OK,
+    summary="로그아웃",
+    description="HttpOnly 인증 쿠키를 삭제하고 로그아웃 상태로 만듭니다.",
+)
+async def logout(response: Response) -> LogoutResponse:
     cookie_common = {"path": "/"}
     if settings.auth_cookie_domain:
         cookie_common["domain"] = settings.auth_cookie_domain
@@ -169,4 +172,4 @@ async def logout(response: Response) -> None:
     response.delete_cookie(key=settings.auth_refresh_cookie_name, **cookie_common)
     response.delete_cookie(key=settings.auth_expires_cookie_name, **cookie_common)
 
-    return None
+    return LogoutResponse(message="Logged out")

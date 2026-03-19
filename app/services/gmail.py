@@ -17,44 +17,65 @@ class GmailService:
         user_id: str = "me",
         max_results: int = 20,
     ) -> list[dict[str, Any]]:
-        """Fetch only unread messages."""
-        data = await self.fetch_triage_emails(
-            access_token=access_token,
-            user_id=user_id,
-            max_unread=max_results,
-            max_stale=1,
-        )
-        return data["unread"]
+        """Fetch inbox messages for initial sync and return normalized message details."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        query = "in:inbox -in:trash -in:spam"
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            message_ids = await self._list_all_message_ids(
+                client=client,
+                headers=headers,
+                user_id=user_id,
+                query=query,
+                page_size=max_results,
+            )
+            detail_tasks = [
+                self._fetch_message_detail(
+                    client=client,
+                    access_token=access_token,
+                    user_id=user_id,
+                    message_id=message_id,
+                )
+                for message_id in message_ids
+            ]
+            detail_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
+
+        emails: list[dict[str, Any]] = []
+        for result in detail_results:
+            if isinstance(result, Exception):
+                continue
+            emails.append(result)
+        return emails
 
     async def fetch_triage_emails(
         self,
         access_token: str,
         user_id: str = "me",
         max_unread: int = 100,
-        max_stale: int = 100,
+        max_read: int = 100,
     ) -> dict[str, list[dict[str, Any]]]:
-        """Fetch unread and stale buckets for triage."""
+        """Fetch unread and read buckets for triage."""
         unread_query = "is:unread -in:trash -in:spam"
-        stale_query = "older_than:6m -is:unread -in:trash -in:spam"
+        read_query = "-is:unread -in:trash -in:spam"
 
         headers = {"Authorization": f"Bearer {access_token}"}
         async with httpx.AsyncClient(timeout=20) as client:
-            unread_ids = await self._list_message_ids(
+            unread_ids = await self._list_all_message_ids(
                 client=client,
                 headers=headers,
                 user_id=user_id,
                 query=unread_query,
-                max_results=max_unread,
+                page_size=max_unread,
             )
-            stale_ids = await self._list_message_ids(
+            read_ids = await self._list_all_message_ids(
                 client=client,
                 headers=headers,
                 user_id=user_id,
-                query=stale_query,
-                max_results=max_stale,
+                query=read_query,
+                page_size=max_read,
             )
 
-            all_ids = list(dict.fromkeys(unread_ids + stale_ids))
+            all_ids = list(dict.fromkeys(unread_ids + read_ids))
             detail_tasks = [
                 self._fetch_message_detail(
                     client=client,
@@ -73,11 +94,11 @@ class GmailService:
             detail_map[result.get("gmail_message_id", "")] = result
 
         unread_messages = [detail_map[mid] for mid in unread_ids if mid in detail_map]
-        stale_messages = [detail_map[mid] for mid in stale_ids if mid in detail_map]
+        read_messages = [detail_map[mid] for mid in read_ids if mid in detail_map]
 
         return {
             "unread": unread_messages,
-            "stale": stale_messages,
+            "read": read_messages,
         }
 
     async def apply_bulk_action(
@@ -88,11 +109,11 @@ class GmailService:
         user_id: str = "me",
     ) -> dict[str, Any]:
         """Apply archive or trash action to selected messages."""
-        if action not in {"archive", "trash"}:
+        if action not in {"archive", "inbox_unlabel", "trash"}:
             raise HTTPException(status_code=400, detail="Unsupported action")
 
-        if action == "archive":
-            await self._batch_archive(access_token=access_token, user_id=user_id, message_ids=message_ids)
+        if action in {"archive", "inbox_unlabel"}:
+            await self._batch_unarchive(access_token=access_token, user_id=user_id, message_ids=message_ids)
             return {"processed_count": len(message_ids), "failed_ids": [], "missing_ids": []}
 
         trash_result = await self._trash_messages(
@@ -119,6 +140,7 @@ class GmailService:
         remove_label_ids: list[str],
     ) -> dict[str, Any]:
         """Apply Gmail label updates in chunks and return processed/failed IDs."""
+        remove_label_ids = self._normalize_remove_label_ids(remove_label_ids=remove_label_ids)
         headers = {"Authorization": f"Bearer {access_token}"}
         url = f"{GMAIL_API_BASE}/users/{user_id}/messages/batchModify"
 
@@ -140,8 +162,50 @@ class GmailService:
             "failed_ids": failed_ids,
         }
 
-    async def _batch_archive(self, access_token: str, user_id: str, message_ids: list[str]) -> None:
-        """메일의 별표를 표시하여 중요도를 표시합니다."""
+    async def create_label(
+        self,
+        access_token: str,
+        user_id: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Create a Gmail user label and return the created label metadata."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        url = f"{GMAIL_API_BASE}/users/{user_id}/labels"
+        payload = {
+            "name": name.strip(),
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        }
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(url, headers=headers, json=payload)
+
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "Failed to create Gmail label",
+                    "google_response": response.text,
+                },
+            )
+
+        data = response.json()
+        return {
+            "gmail_label_id": data.get("id", ""),
+            "name": data.get("name", name.strip()),
+            "label_type": data.get("type", "user"),
+        }
+
+    @staticmethod
+    def _normalize_remove_label_ids(remove_label_ids: list[str]) -> list[str]:
+        """라벨 변경 시 받은편지함 해제가 함께 일어나도록 정규화한다."""
+        normalized = [str(label).upper() for label in remove_label_ids if str(label).strip()]
+        if "INBOX" not in normalized:
+            normalized.append("INBOX")
+        return list(dict.fromkeys(normalized))
+
+    async def _batch_unarchive(self, access_token: str, user_id: str, message_ids: list[str]) -> None:
+        """받은편지함에서 메일을 제거합니다."""
         headers = {"Authorization": f"Bearer {access_token}"}
         url = f"{GMAIL_API_BASE}/users/{user_id}/messages/batchModify"
 
@@ -150,14 +214,14 @@ class GmailService:
             for chunk in chunks:
                 payload = {
                     "ids": chunk,
-                    "addLabelIds": ["STARRED"],
+                    "removeLabelIds": ["INBOX"],
                 }
                 response = await client.post(url, headers=headers, json=payload)
                 if response.status_code >= 400:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
-                            "message": "Failed to archive messages",
+                            "message": "Failed to remove inbox label from messages",
                             "google_response": response.text,
                         },
                     )
@@ -211,30 +275,44 @@ class GmailService:
             return "missing"
         return "failed"
 
-    async def _list_message_ids(
+    async def _list_all_message_ids(
         self,
         client: httpx.AsyncClient,
         headers: dict[str, str],
         user_id: str,
         query: str,
-        max_results: int,
+        page_size: int,
     ) -> list[str]:
-        """List message IDs by Gmail search query."""
+        """List all message IDs by Gmail search query with pagination."""
         list_url = f"{GMAIL_API_BASE}/users/{user_id}/messages"
-        params = {"q": query, "maxResults": max_results}
-        response = await client.get(list_url, headers=headers, params=params)
-        if response.status_code >= 400:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "message": "Failed to fetch Gmail list",
-                    "google_response": response.text,
-                    "query": query,
-                },
-            )
+        message_ids: list[str] = []
+        page_token: str | None = None
 
-        message_refs = response.json().get("messages", [])
-        return [item["id"] for item in message_refs if "id" in item]
+        while True:
+            params: dict[str, Any] = {"q": query, "maxResults": page_size}
+            if page_token:
+                params["pageToken"] = page_token
+
+            response = await client.get(list_url, headers=headers, params=params)
+            if response.status_code >= 400:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "message": "Failed to fetch Gmail list",
+                        "google_response": response.text,
+                        "query": query,
+                    },
+                )
+
+            payload = response.json()
+            message_refs = payload.get("messages", [])
+            message_ids.extend(item["id"] for item in message_refs if "id" in item)
+
+            page_token = payload.get("nextPageToken")
+            if not page_token:
+                break
+
+        return message_ids
 
     async def _fetch_message_detail(
         self,
