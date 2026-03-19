@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS emails_raw (
     snippet TEXT,
     internal_date TEXT,
     label_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, -- minimal metadata only; full payload is temporary
     embedding vector(768),
     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -47,6 +47,21 @@ CREATE INDEX IF NOT EXISTS idx_email_analysis_account_id_analyzed_at ON email_an
 CREATE INDEX IF NOT EXISTS idx_email_analysis_category ON email_analysis(category);
 CREATE INDEX IF NOT EXISTS idx_email_analysis_urgency ON email_analysis(urgency_score DESC);
 CREATE INDEX IF NOT EXISTS idx_email_analysis_analyzed_at ON email_analysis(analyzed_at DESC);
+
+CREATE TABLE IF NOT EXISTS gmail_labels (
+    id BIGSERIAL PRIMARY KEY,
+    account_id TEXT NOT NULL DEFAULT 'unknown',
+    gmail_label_id TEXT NOT NULL,
+    label_name TEXT NOT NULL,
+    label_type TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (account_id, gmail_label_id)
+);
+
+ALTER TABLE gmail_labels ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT 'unknown';
+CREATE INDEX IF NOT EXISTS idx_gmail_labels_account_id ON gmail_labels(account_id);
+CREATE INDEX IF NOT EXISTS idx_gmail_labels_account_id_label_name ON gmail_labels(account_id, label_name);
 
 CREATE TABLE IF NOT EXISTS reply_memory (
     id BIGSERIAL PRIMARY KEY,

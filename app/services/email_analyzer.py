@@ -244,10 +244,10 @@ class EmailAnalyzer:
     def _build_summary(self, subject: str, snippet: str) -> str:
         """Build short summary from subject/snippet."""
         if subject and snippet:
-            return f"{subject} - {snippet[:120]}"
+            return f"{subject} - {snippet[:100]}"
         if subject:
-            return subject[:160]
-        return snippet[:160]
+            return subject[:120]
+        return snippet[:120]
 
     def _build_draft_context(self, category: str, summary: str) -> str:
         """Build compact context string for draft generation."""

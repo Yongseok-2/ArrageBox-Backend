@@ -1,7 +1,7 @@
 ﻿from fastapi import APIRouter, Query
 
 from app.core.db import get_db_pool
-from app.models.analysis import EmailAnalysisItem, EmailAnalysisListResponse
+from app.models.analysis import EmailAnalysisItem, EmailAnalysisListResponse, EmailAnalysisRecentRequest
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -14,9 +14,21 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 async def get_recent_analysis(
     account_id: str = Query(..., min_length=2, max_length=200),
     limit: int = Query(default=20, ge=1, le=200),
+    date_filter: str = Query(default="all"),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
 ) -> EmailAnalysisListResponse:
-    """지정한 account_id의 최근 메일 분석 결과 목록을 반환합니다."""
-    query = """
+    """지정한 account_id의 메일 분석 결과 목록을 반환합니다."""
+    request = EmailAnalysisRecentRequest(
+        account_id=account_id,
+        limit=limit,
+        date_filter=date_filter,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    date_filter_clause, params = _build_analysis_date_filter_clause(request)
+    limit_placeholder = 2 + len(params)
+    query = f"""
     SELECT
         a.account_id,
         a.gmail_message_id,
@@ -33,13 +45,14 @@ async def get_recent_analysis(
     FROM email_analysis a
     LEFT JOIN emails_raw r ON r.gmail_message_id = a.gmail_message_id
     WHERE a.account_id = $1
+      {date_filter_clause}
     ORDER BY a.analyzed_at DESC
-    LIMIT $2
+    LIMIT ${limit_placeholder}
     """
 
     pool = get_db_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(query, account_id, limit)
+        rows = await conn.fetch(query, account_id, *params, limit)
 
     items = [
         EmailAnalysisItem(
@@ -59,3 +72,26 @@ async def get_recent_analysis(
         for row in rows
     ]
     return EmailAnalysisListResponse(items=items, count=len(items))
+
+
+def _build_analysis_date_filter_clause(payload: EmailAnalysisRecentRequest) -> tuple[str, list[str]]:
+    if payload.date_filter == "all":
+        return "", []
+
+    if payload.date_filter == "range":
+        if not payload.start_date or not payload.end_date:
+            return "", []
+        return (
+            " AND COALESCE(r.internal_date, '') <> '' AND to_timestamp((r.internal_date::bigint) / 1000.0) BETWEEN $2::date AND ($3::date + INTERVAL '1 day' - INTERVAL '1 second')",
+            [payload.start_date, payload.end_date],
+        )
+
+    months_map = {"1m": 1, "3m": 3, "6m": 6}
+    months = months_map.get(payload.date_filter)
+    if months is None:
+        return "", []
+
+    return (
+        " AND COALESCE(r.internal_date, '') <> '' AND to_timestamp((r.internal_date::bigint) / 1000.0) <= NOW() - make_interval(months => $2::int)",
+        [str(months)],
+    )

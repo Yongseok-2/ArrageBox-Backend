@@ -5,19 +5,21 @@ from fastapi import APIRouter
 
 from app.core.db import get_db_pool
 from app.models.email import (
-    BucketSummaryItem,
     BulkActionRequest,
     BulkActionResponse,
-    CategorySummaryItem,
+    BucketGroupItem,
     EmailSyncRequest,
     EmailSyncResponse,
-    LabelSummaryItem,
+    LabelCreateRequest,
+    LabelCreateResponse,
+    LabelGroupItem,
     LabelUpdateRequest,
     LabelUpdateResponse,
-    TriageGroupItem,
+    SenderGroupItem,
     TriagePreviewDbRequest,
     TriagePreviewRequest,
     TriagePreviewResponse,
+    TriageGroupItem,
 )
 from app.services.email_analyzer import email_analyzer
 from app.services.gmail import gmail_service
@@ -29,25 +31,25 @@ router = APIRouter(prefix="/emails", tags=["emails"])
 @router.post(
     "/sync",
     response_model=EmailSyncResponse,
-    summary="읽지 않은 메일 동기화",
+    summary="받은편지함 전체 동기화",
 )
 async def sync_unread_emails(payload: EmailSyncRequest) -> EmailSyncResponse:
-    """읽지 않은 메일을 Gmail에서 가져와 Kafka 토픽으로 발행합니다."""
-    unread_emails = await gmail_service.fetch_unread_emails(
+    """받은편지함 전체 메일을 Gmail에서 가져와 Kafka 토픽으로 발행합니다."""
+    inbox_emails = await gmail_service.fetch_unread_emails(
         access_token=payload.access_token,
         user_id=payload.user_id,
         max_results=payload.max_results,
     )
 
     published_count = 0
-    for email in unread_emails:
+    for email in inbox_emails:
         # 멀티 사용자 분리를 위해 account_id를 payload에 포함한다.
         email["account_id"] = payload.account_id
         await kafka_email_producer.publish_email(email)
         published_count += 1
 
     return EmailSyncResponse(
-        fetched_count=len(unread_emails),
+        fetched_count=len(inbox_emails),
         published_count=published_count,
         topic=kafka_email_producer.topic,
     )
@@ -59,17 +61,17 @@ async def sync_unread_emails(payload: EmailSyncRequest) -> EmailSyncResponse:
     summary="일괄 처리 미리보기",
 )
 async def preview_triage_groups(payload: TriagePreviewRequest) -> TriagePreviewResponse:
-    """Gmail 실시간 데이터를 기준으로 unread/stale 그룹 미리보기를 생성합니다."""
+    """Gmail 실시간 데이터를 기준으로 unread/read 그룹 미리보기를 생성합니다."""
     triage_data = await gmail_service.fetch_triage_emails(
         access_token=payload.access_token,
         user_id=payload.user_id,
         max_unread=payload.max_unread,
-        max_stale=payload.max_stale,
+        max_read=payload.max_read,
     )
 
     groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
-    for bucket, items in [("unread", triage_data["unread"]), ("stale", triage_data["stale"])]:
+    for bucket, items in [("unread", triage_data["unread"]), ("read", triage_data["read"])]:
         for email in items:
             analysis = await email_analyzer.analyze_email(email)
             sender_display = _extract_sender_display(email.get("from_email", ""))
@@ -110,8 +112,9 @@ async def preview_triage_groups(payload: TriagePreviewRequest) -> TriagePreviewR
     summary="DB 기반 일괄 처리 미리보기",
 )
 async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> TriagePreviewResponse:
-    """DB에 저장된 메일/분석 결과를 기준으로 unread/stale 그룹 미리보기를 생성합니다."""
-    query = """
+    """DB에 저장된 메일/분석 결과를 기준으로 unread/read 그룹 미리보기를 생성합니다."""
+    date_filter_clause, date_filter_params = _build_date_filter_clause(payload)
+    query = f"""
     WITH source AS (
         SELECT
             r.gmail_message_id,
@@ -130,6 +133,7 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
         JOIN email_analysis a ON a.gmail_message_id = r.gmail_message_id
         WHERE r.account_id = $4
           AND NOT (r.label_ids ?| ARRAY['TRASH', 'SPAM'])
+          {date_filter_clause}
     ),
     unread_rows AS (
         SELECT *, 'unread'::text AS bucket
@@ -138,18 +142,17 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
         ORDER BY internal_ts DESC NULLS LAST
         LIMIT $1
     ),
-    stale_rows AS (
-        SELECT *, 'stale'::text AS bucket
+    read_rows AS (
+        SELECT *, 'read'::text AS bucket
         FROM source
         WHERE NOT (label_ids ? 'UNREAD')
-          AND internal_ts IS NOT NULL
-          AND internal_ts < (NOW() - make_interval(months => $2::int))
-        ORDER BY internal_ts ASC
-        LIMIT $3
+        AND internal_ts IS NOT NULL
+        ORDER BY internal_ts DESC NULLS LAST
+        LIMIT $2
     )
     SELECT * FROM unread_rows
     UNION ALL
-    SELECT * FROM stale_rows
+    SELECT * FROM read_rows
     """
 
     pool = get_db_pool()
@@ -157,9 +160,9 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
         rows = await conn.fetch(
             query,
             payload.max_unread,
-            payload.stale_months,
-            payload.max_stale,
+            payload.max_read,
             payload.account_id,
+            *date_filter_params,
         )
 
     groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
@@ -209,7 +212,7 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
     summary="일괄 액션 실행",
 )
 async def apply_triage_action(payload: BulkActionRequest) -> BulkActionResponse:
-    """선택한 message_ids에 대해 archive 또는 trash를 수행합니다."""
+    """선택한 message_ids에 대해 inbox 해제 또는 trash를 수행합니다."""
     result = await gmail_service.apply_bulk_action(
         access_token=payload.access_token,
         action=payload.action,
@@ -241,12 +244,13 @@ async def apply_triage_action(payload: BulkActionRequest) -> BulkActionResponse:
 )
 async def update_labels(payload: LabelUpdateRequest) -> LabelUpdateResponse:
     """Gmail 라벨 변경과 DB label_ids 동기화를 함께 수행합니다."""
+    remove_label_ids = _normalize_remove_label_ids(payload.remove_label_ids)
     result = await gmail_service.apply_label_updates(
         access_token=payload.access_token,
         user_id=payload.user_id,
         message_ids=payload.message_ids,
         add_label_ids=payload.add_label_ids,
-        remove_label_ids=payload.remove_label_ids,
+        remove_label_ids=remove_label_ids,
     )
 
     failed_ids = result["failed_ids"]
@@ -258,7 +262,7 @@ async def update_labels(payload: LabelUpdateRequest) -> LabelUpdateResponse:
             account_id=payload.account_id,
             message_ids=success_ids,
             add_label_ids=payload.add_label_ids,
-            remove_label_ids=payload.remove_label_ids,
+            remove_label_ids=remove_label_ids,
         )
 
     return LabelUpdateResponse(
@@ -267,6 +271,33 @@ async def update_labels(payload: LabelUpdateRequest) -> LabelUpdateResponse:
         partial_failed=bool(failed_ids),
         success_ids=success_ids,
         failed_ids=failed_ids,
+    )
+
+
+@router.post(
+    "/labels/create",
+    response_model=LabelCreateResponse,
+    summary="사용자 라벨 생성",
+)
+async def create_label(payload: LabelCreateRequest) -> LabelCreateResponse:
+    """Gmail 사용자 라벨을 생성하고 DB에 메타데이터를 저장합니다."""
+    created_label = await gmail_service.create_label(
+        access_token=payload.access_token,
+        user_id=payload.user_id,
+        name=payload.name,
+    )
+
+    await _upsert_gmail_label_metadata(
+        account_id=payload.account_id,
+        gmail_label_id=str(created_label["gmail_label_id"]),
+        name=str(created_label["name"]),
+        label_type=str(created_label["label_type"]),
+    )
+
+    return LabelCreateResponse(
+        gmail_label_id=str(created_label["gmail_label_id"]),
+        name=str(created_label["name"]),
+        label_type=str(created_label["label_type"]),
     )
 
 
@@ -315,41 +346,105 @@ async def _sync_label_ids_in_db(
             await conn.execute(update_sql, account_id, row["gmail_message_id"], list(labels))
 
 
+async def _upsert_gmail_label_metadata(
+    account_id: str,
+    gmail_label_id: str,
+    name: str,
+    label_type: str,
+) -> None:
+    """생성된 Gmail 사용자 라벨의 메타데이터를 DB에 저장합니다."""
+    pool = get_db_pool()
+    query = """
+    INSERT INTO gmail_labels (account_id, gmail_label_id, label_name, label_type, updated_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (account_id, gmail_label_id)
+    DO UPDATE SET
+        label_name = EXCLUDED.label_name,
+        label_type = EXCLUDED.label_type,
+        updated_at = EXCLUDED.updated_at
+    """
+    async with pool.acquire() as conn:
+        await conn.execute(query, account_id, gmail_label_id, name, label_type)
+
+
+def _normalize_remove_label_ids(remove_label_ids: list[str]) -> list[str]:
+    """Gmail 라벨 변경과 DB 반영에서 받은편지함 해제를 일관되게 유지한다."""
+    normalized = [str(label).upper() for label in remove_label_ids if str(label).strip()]
+    if "INBOX" not in normalized:
+        normalized.append("INBOX")
+    return list(dict.fromkeys(normalized))
+
+
 def _build_triage_response(groups: dict[tuple[str, str, str, str], dict[str, Any]]) -> TriagePreviewResponse:
     """그룹 집계 데이터를 API 응답 모델 형태로 변환합니다."""
-    items: list[TriageGroupItem] = []
+    nested: dict[str, dict[str, dict[str, dict[str, Any]]]] = {"unread": {}, "read": {}}
+    total_count = 0
+
     for group in groups.values():
         count = int(group["count"])
         confidence_sum = float(group["confidence_sum"])
-        items.append(
-            TriageGroupItem(
-                group_id=str(group["group_id"]),
-                bucket=str(group["bucket"]),
-                label_group=str(group["label_group"]),
-                sender=str(group["sender"]),
-                category=str(group["category"]),
-                count=count,
-                avg_confidence_score=round(confidence_sum / count, 4) if count else 0.0,
-                review_required_count=int(group["review_required_count"]),
-                message_ids=[str(mid) for mid in group["message_ids"] if mid],
-                message_links=[_build_gmail_message_link(str(mid)) for mid in group["message_ids"] if mid],
-                sample_subjects=[str(subject) for subject in group["sample_subjects"]],
-            )
-        )
+        bucket = str(group["bucket"])
+        label_group = str(group["label_group"])
+        sender = str(group["sender"])
+        category = str(group["category"])
+        category_item = {
+            "category": category,
+            "count": count,
+            "avg_confidence_score": round(confidence_sum / count, 4) if count else 0.0,
+            "review_required_count": int(group["review_required_count"]),
+            "message_ids": [str(mid) for mid in group["message_ids"] if mid],
+            "message_links": [_build_gmail_message_link(str(mid)) for mid in group["message_ids"] if mid],
+            "sample_subjects": [str(subject) for subject in group["sample_subjects"]],
+        }
 
-    sorted_groups = sorted(items, key=lambda item: item.count, reverse=True)
-    bucket_summary = _build_bucket_summary(sorted_groups)
-    category_summary = _build_category_summary(sorted_groups)
-    label_summary = _build_label_summary(sorted_groups)
+        bucket_map = nested[bucket]
+        label_map = bucket_map.setdefault(label_group, {})
+        sender_map = label_map.setdefault(sender, {})
+        sender_map[category] = category_item
 
-    return TriagePreviewResponse(
-        total_unread=sum(g.count for g in sorted_groups if g.bucket == "unread"),
-        total_stale=sum(g.count for g in sorted_groups if g.bucket == "stale"),
-        groups=sorted_groups,
-        bucket_summary=bucket_summary,
-        category_summary=category_summary,
-        label_summary=label_summary,
-    )
+        total_count += count
+
+    buckets: list[BucketGroupItem] = []
+    for bucket_name in ["unread", "read"]:
+        label_items: list[LabelGroupItem] = []
+        bucket_total = 0
+        for label_group, senders in sorted(
+            nested[bucket_name].items(),
+            key=lambda item: sum(cat["count"] for sender in item[1].values() for cat in sender.values()),
+            reverse=True,
+        ):
+            sender_items: list[SenderGroupItem] = []
+            label_total = 0
+            for sender, categories in sorted(
+                senders.items(),
+                key=lambda item: sum(cat["count"] for cat in item[1].values()),
+                reverse=True,
+            ):
+                category_items = [
+                    TriageGroupItem(
+                        category=category,
+                        count=category_data["count"],
+                        avg_confidence_score=category_data["avg_confidence_score"],
+                        review_required_count=category_data["review_required_count"],
+                        message_ids=category_data["message_ids"],
+                        message_links=category_data["message_links"],
+                        sample_subjects=category_data["sample_subjects"],
+                    )
+                    for category, category_data in sorted(categories.items(), key=lambda item: item[1]["count"], reverse=True)
+                ]
+                sender_count = sum(item.count for item in category_items)
+                label_total += sender_count
+                sender_items.append(SenderGroupItem(sender=sender, count=sender_count, categories=category_items))
+
+            sender_items.sort(key=lambda item: item.count, reverse=True)
+            label_items.append(LabelGroupItem(label_group=label_group, count=label_total, senders=sender_items))
+            bucket_total += label_total
+
+        label_items.sort(key=lambda item: item.count, reverse=True)
+        buckets.append(BucketGroupItem(bucket=bucket_name, count=bucket_total, label_groups=label_items))
+
+    buckets.sort(key=lambda item: item.count, reverse=True)
+    return TriagePreviewResponse(total_count=total_count, buckets=buckets)
 
 
 def _extract_sender_display(raw_from: str) -> str:
@@ -371,31 +466,6 @@ def _sender_group_key(raw_from: str) -> str:
     if name:
         return name.strip().lower()
     return (raw_from or "").strip().lower()
-
-
-def _build_bucket_summary(groups: list[TriageGroupItem]) -> list[BucketSummaryItem]:
-    """버킷별 메일 수와 그룹 수를 계산합니다."""
-    bucket_counts: dict[str, int] = {"unread": 0, "stale": 0}
-    group_counts: dict[str, int] = {"unread": 0, "stale": 0}
-
-    for group in groups:
-        bucket_counts[group.bucket] += group.count
-        group_counts[group.bucket] += 1
-
-    return [
-        BucketSummaryItem(bucket="unread", count=bucket_counts["unread"], group_count=group_counts["unread"]),
-        BucketSummaryItem(bucket="stale", count=bucket_counts["stale"], group_count=group_counts["stale"]),
-    ]
-
-
-def _build_category_summary(groups: list[TriageGroupItem]) -> list[CategorySummaryItem]:
-    """카테고리별 메일 수를 계산합니다."""
-    counts: dict[str, int] = {}
-    for group in groups:
-        counts[group.category] = counts.get(group.category, 0) + group.count
-
-    sorted_counts = sorted(counts.items(), key=lambda item: item[1], reverse=True)
-    return [CategorySummaryItem(category=category, count=count) for category, count in sorted_counts]
 
 
 def _detect_label_group(label_ids: list[str] | object) -> str:
@@ -429,20 +499,31 @@ def _detect_label_group(label_ids: list[str] | object) -> str:
     return "normal"
 
 
-def _build_label_summary(groups: list[TriageGroupItem]) -> list[LabelSummaryItem]:
-    """라벨 그룹별 메일 수를 계산합니다."""
-    counts: dict[str, int] = {"important": 0, "starred": 0, "user_labeled": 0, "normal": 0}
-    for group in groups:
-        counts[group.label_group] = counts.get(group.label_group, 0) + group.count
-
-    order = ["important", "starred", "user_labeled", "normal"]
-    return [
-        LabelSummaryItem(label_group=label_group, count=counts[label_group])
-        for label_group in order
-        if counts[label_group] > 0
-    ]
-
 def _build_gmail_message_link(message_id: str) -> str:
     """gmail_message_id를 Gmail 웹 링크로 변환합니다."""
     return f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+
+
+def _build_date_filter_clause(payload: TriagePreviewDbRequest) -> tuple[str, list[Any]]:
+    """DB 조회용 날짜 필터 SQL 조각과 파라미터를 만든다."""
+    if payload.date_filter == "all":
+        return "", []
+
+    if payload.date_filter == "range":
+        if not payload.start_date or not payload.end_date:
+            return "", []
+        return (
+            " AND to_timestamp((r.internal_date::bigint) / 1000.0) BETWEEN $5::date AND ($6::date + INTERVAL '1 day' - INTERVAL '1 second')",
+            [payload.start_date, payload.end_date],
+        )
+
+    months_map = {"1m": 1, "3m": 3, "6m": 6}
+    months = months_map.get(payload.date_filter)
+    if months is None:
+        return "", []
+
+    return (
+        " AND to_timestamp((r.internal_date::bigint) / 1000.0) <= NOW() - make_interval(months => $5::int)",
+        [months],
+    )
 

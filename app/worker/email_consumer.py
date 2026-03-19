@@ -7,6 +7,7 @@ from typing import Any
 import asyncpg
 from aiokafka import AIOKafkaConsumer
 
+from app.core.redis_store import redis_temp_body_store
 from app.core.settings import settings
 from app.services.email_analyzer import email_analyzer
 
@@ -96,6 +97,11 @@ def has_valid_account_id(email_payload: dict[str, Any]) -> bool:
 
 async def save_email(pool: asyncpg.Pool, email: dict[str, Any]) -> None:
     """Save or update raw email payload."""
+    minimal_payload = {
+        "gmail_message_id": email.get("gmail_message_id"),
+        "gmail_thread_id": email.get("gmail_thread_id"),
+        "label_ids": email.get("label_ids", []),
+    }
     async with pool.acquire() as conn:
         await conn.execute(
             INSERT_RAW_SQL,
@@ -109,9 +115,20 @@ async def save_email(pool: asyncpg.Pool, email: dict[str, Any]) -> None:
             email.get("snippet"),
             email.get("internal_date"),
             json.dumps(email.get("label_ids", [])),
-            json.dumps(email.get("raw", {})),
+            json.dumps(minimal_payload),
             datetime.now(UTC),
         )
+
+
+async def store_temp_email_body(email: dict[str, Any]) -> str:
+    """Store the raw payload in short-lived storage and return its key."""
+    key = f"email-body:{email.get('account_id')}:{email.get('gmail_message_id')}"
+    await redis_temp_body_store.set_json(
+        key,
+        email.get("raw", {}),
+        ttl_seconds=settings.email_body_ttl_seconds,
+    )
+    return key
 
 
 async def save_email_analysis(
@@ -159,9 +176,13 @@ async def run_consumer() -> None:
                 logger.warning("Skip payload without valid account_id")
                 continue
             account_id = str(email_payload.get("account_id", "")).strip()
-            await save_email(pool, email_payload)
-            analysis_payload = await email_analyzer.analyze_email(email_payload)
-            await save_email_analysis(pool, account_id=account_id, analysis=analysis_payload)
+            temp_key = await store_temp_email_body(email_payload)
+            try:
+                await save_email(pool, email_payload)
+                analysis_payload = await email_analyzer.analyze_email(email_payload)
+                await save_email_analysis(pool, account_id=account_id, analysis=analysis_payload)
+            finally:
+                await redis_temp_body_store.delete(temp_key)
     finally:
         await consumer.stop()
         await pool.close()

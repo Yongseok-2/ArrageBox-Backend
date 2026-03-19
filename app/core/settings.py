@@ -21,6 +21,8 @@ class Settings:
     analysis_confidence_threshold: float = float(
         os.getenv("ANALYSIS_CONFIDENCE_THRESHOLD", "0.72")
     )
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    email_body_ttl_seconds: int = int(os.getenv("EMAIL_BODY_TTL_SECONDS", "600"))
     auth_access_cookie_name: str = os.getenv("AUTH_ACCESS_COOKIE_NAME", "g_access_token")
     auth_refresh_cookie_name: str = os.getenv("AUTH_REFRESH_COOKIE_NAME", "g_refresh_token")
     auth_expires_cookie_name: str = os.getenv("AUTH_EXPIRES_COOKIE_NAME", "g_expires_at")
