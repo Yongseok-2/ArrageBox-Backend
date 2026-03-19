@@ -1,9 +1,10 @@
 ﻿from email.utils import parseaddr
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Cookie, HTTPException, status
 
 from app.core.db import get_db_pool
+from app.core.settings import settings
 from app.models.email import (
     BulkActionRequest,
     BulkActionResponse,
@@ -28,15 +29,32 @@ from app.services.kafka_producer import kafka_email_producer
 router = APIRouter(prefix="/emails", tags=["emails"])
 
 
+def _resolve_access_token(
+    body_token: str | None,
+    cookie_token: str | None,
+) -> str:
+    token = (body_token or cookie_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Access token is required. Sign in again to refresh auth cookies.",
+        )
+    return token
+
+
 @router.post(
     "/sync",
     response_model=EmailSyncResponse,
     summary="받은편지함 전체 동기화",
 )
-async def sync_unread_emails(payload: EmailSyncRequest) -> EmailSyncResponse:
+async def sync_unread_emails(
+    payload: EmailSyncRequest,
+    access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name),
+) -> EmailSyncResponse:
     """받은편지함 전체 메일을 Gmail에서 가져와 Kafka 토픽으로 발행합니다."""
+    access_token = _resolve_access_token(payload.access_token, access_cookie)
     inbox_emails = await gmail_service.fetch_unread_emails(
-        access_token=payload.access_token,
+        access_token=access_token,
         user_id=payload.user_id,
         max_results=payload.max_results,
     )
@@ -60,10 +78,14 @@ async def sync_unread_emails(payload: EmailSyncRequest) -> EmailSyncResponse:
     response_model=TriagePreviewResponse,
     summary="일괄 처리 미리보기",
 )
-async def preview_triage_groups(payload: TriagePreviewRequest) -> TriagePreviewResponse:
+async def preview_triage_groups(
+    payload: TriagePreviewRequest,
+    access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name),
+) -> TriagePreviewResponse:
     """Gmail 실시간 데이터를 기준으로 unread/read 그룹 미리보기를 생성합니다."""
+    access_token = _resolve_access_token(payload.access_token, access_cookie)
     triage_data = await gmail_service.fetch_triage_emails(
-        access_token=payload.access_token,
+        access_token=access_token,
         user_id=payload.user_id,
         max_unread=payload.max_unread,
         max_read=payload.max_read,
@@ -117,22 +139,21 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
     query = f"""
     WITH source AS (
         SELECT
-            r.gmail_message_id,
-            r.from_email,
-            r.subject,
-            r.label_ids,
+            a.gmail_message_id,
+            a.from_email,
+            a.subject,
+            a.label_ids,
             CASE
-                WHEN COALESCE(r.internal_date, '') ~ '^[0-9]+$'
-                THEN to_timestamp((r.internal_date::bigint) / 1000.0)
+                WHEN COALESCE(a.internal_date, '') ~ '^[0-9]+$'
+                THEN to_timestamp((a.internal_date::bigint) / 1000.0)
                 ELSE NULL
             END AS internal_ts,
             a.category,
             a.confidence_score,
             a.review_required
-        FROM emails_raw r
-        JOIN email_analysis a ON a.gmail_message_id = r.gmail_message_id
-        WHERE r.account_id = $4
-          AND NOT (r.label_ids ?| ARRAY['TRASH', 'SPAM'])
+        FROM email_analysis a
+        WHERE a.account_id = $4
+          AND NOT (a.label_ids ?| ARRAY['TRASH', 'SPAM'])
           {date_filter_clause}
     ),
     unread_rows AS (
@@ -211,10 +232,14 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
     response_model=BulkActionResponse,
     summary="일괄 액션 실행",
 )
-async def apply_triage_action(payload: BulkActionRequest) -> BulkActionResponse:
+async def apply_triage_action(
+    payload: BulkActionRequest,
+    access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name),
+) -> BulkActionResponse:
     """선택한 message_ids에 대해 inbox 해제 또는 trash를 수행합니다."""
+    access_token = _resolve_access_token(payload.access_token, access_cookie)
     result = await gmail_service.apply_bulk_action(
-        access_token=payload.access_token,
+        access_token=access_token,
         action=payload.action,
         message_ids=payload.message_ids,
         user_id=payload.user_id,
@@ -242,11 +267,15 @@ async def apply_triage_action(payload: BulkActionRequest) -> BulkActionResponse:
     response_model=LabelUpdateResponse,
     summary="라벨 변경 동기화",
 )
-async def update_labels(payload: LabelUpdateRequest) -> LabelUpdateResponse:
+async def update_labels(
+    payload: LabelUpdateRequest,
+    access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name),
+) -> LabelUpdateResponse:
     """Gmail 라벨 변경과 DB label_ids 동기화를 함께 수행합니다."""
+    access_token = _resolve_access_token(payload.access_token, access_cookie)
     remove_label_ids = _normalize_remove_label_ids(payload.remove_label_ids)
     result = await gmail_service.apply_label_updates(
-        access_token=payload.access_token,
+        access_token=access_token,
         user_id=payload.user_id,
         message_ids=payload.message_ids,
         add_label_ids=payload.add_label_ids,
@@ -279,10 +308,14 @@ async def update_labels(payload: LabelUpdateRequest) -> LabelUpdateResponse:
     response_model=LabelCreateResponse,
     summary="사용자 라벨 생성",
 )
-async def create_label(payload: LabelCreateRequest) -> LabelCreateResponse:
+async def create_label(
+    payload: LabelCreateRequest,
+    access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name),
+) -> LabelCreateResponse:
     """Gmail 사용자 라벨을 생성하고 DB에 메타데이터를 저장합니다."""
+    access_token = _resolve_access_token(payload.access_token, access_cookie)
     created_label = await gmail_service.create_label(
-        access_token=payload.access_token,
+        access_token=access_token,
         user_id=payload.user_id,
         name=payload.name,
     )
@@ -306,7 +339,7 @@ async def _delete_messages_from_db(account_id: str, message_ids: list[str]) -> N
     if not message_ids:
         return
 
-    query = "DELETE FROM emails_raw WHERE account_id = $1 AND gmail_message_id = ANY($2::text[])"
+    query = "DELETE FROM email_analysis WHERE account_id = $1 AND gmail_message_id = ANY($2::text[])"
     pool = get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute(query, account_id, message_ids)
@@ -318,18 +351,18 @@ async def _sync_label_ids_in_db(
     add_label_ids: list[str],
     remove_label_ids: list[str],
 ) -> None:
-    """DB emails_raw.label_ids를 Gmail 변경 결과에 맞춰 동기화합니다."""
+    """DB email_analysis.label_ids를 Gmail 변경 결과에 맞춰 동기화합니다."""
     if not message_ids:
         return
 
     pool = get_db_pool()
     select_sql = """
     SELECT gmail_message_id, label_ids
-    FROM emails_raw
+    FROM email_analysis
     WHERE account_id = $1 AND gmail_message_id = ANY($2::text[])
     """
     update_sql = """
-    UPDATE emails_raw
+    UPDATE email_analysis
     SET label_ids = $3::jsonb
     WHERE account_id = $1 AND gmail_message_id = $2
     """

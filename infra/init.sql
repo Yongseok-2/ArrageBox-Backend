@@ -1,6 +1,6 @@
 ﻿CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS emails_raw (
+CREATE TABLE IF NOT EXISTS email_analysis (
     id BIGSERIAL PRIMARY KEY,
     account_id TEXT NOT NULL DEFAULT 'unknown',
     gmail_message_id TEXT UNIQUE NOT NULL,
@@ -12,19 +12,10 @@ CREATE TABLE IF NOT EXISTS emails_raw (
     snippet TEXT,
     internal_date TEXT,
     label_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, -- minimal metadata only; full payload is temporary
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding vector(768),
     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-ALTER TABLE emails_raw ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT 'unknown';
-CREATE INDEX IF NOT EXISTS idx_emails_raw_account_id ON emails_raw(account_id);
-
-CREATE TABLE IF NOT EXISTS email_analysis (
-    id BIGSERIAL PRIMARY KEY,
-    account_id TEXT NOT NULL DEFAULT 'unknown',
-    gmail_message_id TEXT UNIQUE NOT NULL REFERENCES emails_raw(gmail_message_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sender_email TEXT,
     category TEXT NOT NULL,
     urgency_score INT NOT NULL DEFAULT 0,
@@ -38,6 +29,15 @@ CREATE TABLE IF NOT EXISTS email_analysis (
 );
 
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS gmail_thread_id TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS from_email TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS to_email TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS date_header TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS snippet TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS internal_date TEXT;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS label_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS payload_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0.0;
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS analysis_source TEXT NOT NULL DEFAULT 'rules';
 ALTER TABLE email_analysis ADD COLUMN IF NOT EXISTS review_required BOOLEAN NOT NULL DEFAULT false;

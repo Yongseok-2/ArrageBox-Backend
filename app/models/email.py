@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class EmailSyncRequest(BaseModel):
-    access_token: str = Field(..., description="Google OAuth2 access token")
+    access_token: str | None = Field(default=None, description="Google OAuth2 access token (deprecated; cookie preferred)")
     account_id: str = Field(..., min_length=2, max_length=200, description="서비스 내 사용자 식별자(예: Google 이메일)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     max_results: int = Field(default=500, ge=1, le=500, description="받은편지함 전체 동기화 시 페이지당 조회 개수")
@@ -17,7 +17,7 @@ class EmailSyncResponse(BaseModel):
 
 
 class TriagePreviewRequest(BaseModel):
-    access_token: str = Field(..., description="Google OAuth2 access token")
+    access_token: str | None = Field(default=None, description="Google OAuth2 access token (deprecated; cookie preferred)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     max_unread: int = Field(default=100, ge=1, le=500, description="읽지 않은 메일 최대 조회 수")
     max_read: int = Field(default=100, ge=1, le=500, description="읽은 메일 최대 조회 수")
@@ -66,7 +66,7 @@ class TriagePreviewResponse(BaseModel):
 
 
 class BulkActionRequest(BaseModel):
-    access_token: str = Field(..., description="Google OAuth2 access token")
+    access_token: str | None = Field(default=None, description="Google OAuth2 access token (deprecated; cookie preferred)")
     account_id: str = Field(..., min_length=2, max_length=200, description="서비스 내 사용자 식별자(예: Google 이메일)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     action: Literal["archive", "inbox_unlabel", "trash"]
@@ -83,7 +83,7 @@ class BulkActionResponse(BaseModel):
 
 
 class LabelUpdateRequest(BaseModel):
-    access_token: str = Field(..., description="Google OAuth2 access token")
+    access_token: str | None = Field(default=None, description="Google OAuth2 access token (deprecated; cookie preferred)")
     account_id: str = Field(..., min_length=2, max_length=200, description="서비스 내 사용자 식별자(예: Google 이메일)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     message_ids: list[str] = Field(..., min_length=1, max_length=5000, description="라벨을 변경할 Gmail message ID 목록")
@@ -92,7 +92,7 @@ class LabelUpdateRequest(BaseModel):
 
 
 class LabelCreateRequest(BaseModel):
-    access_token: str = Field(..., description="Google OAuth2 access token")
+    access_token: str | None = Field(default=None, description="Google OAuth2 access token (deprecated; cookie preferred)")
     account_id: str = Field(..., min_length=2, max_length=200, description="서비스 내 사용자 식별자(예: Google 이메일)")
     user_id: str = Field(default="me", description="Gmail 사용자 ID (일반적으로 me)")
     name: str = Field(..., min_length=1, max_length=100, description="생성할 Gmail 사용자 라벨 이름")

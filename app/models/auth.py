@@ -9,17 +9,17 @@ class GoogleAuthorizeResponse(BaseModel):
 
 
 class TokenExchangeRequest(BaseModel):
-    code: str = Field(..., description="Google OAuth2 인가 코드")
+    code: str = Field(..., description="Google OAuth2 authorization code")
     redirect_uri: str | None = Field(
         default=None,
-        description="OAuth 인증 시 사용된 Redirect URI (생략 시 GOOGLE_REDIRECT_URI 설정값 사용)",
+        description="Optional redirect URI used for OAuth authorization",
     )
 
 
 class TokenRefreshRequest(BaseModel):
     refresh_token: str | None = Field(
         default=None,
-        description="Google OAuth2 리프레시 토큰 (생략 시 HttpOnly 쿠키 값 사용)",
+        description="Google OAuth2 refresh token (optional; HttpOnly cookie preferred)",
     )
 
 
@@ -34,13 +34,17 @@ class ManagedGoogleTokenResponse(BaseModel):
 class EnsureTokenRequest(BaseModel):
     access_token: str | None = Field(
         default=None,
-        description="현재 액세스 토큰 (생략 시 HttpOnly 쿠키 값 사용)",
+        description="Current access token (optional; HttpOnly cookie preferred)",
     )
     refresh_token: str | None = Field(
         default=None,
-        description="Google OAuth2 리프레시 토큰 (생략 시 HttpOnly 쿠키 값 사용)",
+        description="Google OAuth2 refresh token (optional; HttpOnly cookie preferred)",
     )
     expires_at: datetime | None = Field(
         default=None,
-        description="액세스 토큰 만료 일시 (ISO-8601, UTC 기준, 생략 시 쿠키 값 확인)",
+        description="Current token expiration time (ISO-8601, optional)",
     )
+
+
+class LogoutResponse(BaseModel):
+    message: str

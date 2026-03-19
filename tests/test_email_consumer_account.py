@@ -16,7 +16,7 @@ def test_has_valid_account_id_empty_false() -> None:
     assert has_valid_account_id({}) is False
 
 
-def test_save_email_persists_minimal_payload() -> None:
+def test_upsert_email_persists_combined_payload() -> None:
     class _FakeConn:
         def __init__(self) -> None:
             self.calls: list[tuple[str, tuple[object, ...]]] = []
@@ -52,7 +52,10 @@ def test_save_email_persists_minimal_payload() -> None:
         "raw": {"payload": {"body": "secret"}},
     }
 
-    asyncio.run(email_consumer.save_email(fake_pool, email))
+    asyncio.run(email_consumer.upsert_email(fake_pool, email))
 
     _, args = fake_pool.conn.calls[0]
-    assert args[10] == '{"gmail_message_id": "msg-1", "gmail_thread_id": "thread-1", "label_ids": ["INBOX"]}'
+    assert args[0] == "user@example.com"
+    assert args[1] == "msg-1"
+    assert args[10] == '{"payload": {"body": "secret"}}'
+    assert args[13] == "other"
