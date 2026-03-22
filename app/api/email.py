@@ -91,22 +91,22 @@ async def preview_triage_groups(
         max_read=payload.max_read,
     )
 
-    groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
 
-    for bucket, items in [("unread", triage_data["unread"]), ("read", triage_data["read"])]:
+    for source_bucket, items in [("unread", triage_data["unread"]), ("read", triage_data["read"])]:
         for email in items:
             analysis = await email_analyzer.analyze_email(email)
             sender_display = _extract_sender_display(email.get("from_email", ""))
             sender_key = _sender_group_key(email.get("from_email", ""))
             category = analysis["category"]
             label_group = _detect_label_group(email.get("label_ids", []))
-            key = (bucket, label_group, sender_key, category)
+            bucket = _triage_bucket(source_bucket=source_bucket, label_group=label_group)
+            key = (bucket, sender_key, category)
 
             if key not in groups:
                 groups[key] = {
-                    "group_id": f"{bucket}|{label_group}|{sender_key}|{category}",
+                    "group_id": f"{bucket}|{sender_key}|{category}",
                     "bucket": bucket,
-                    "label_group": label_group,
                     "sender": sender_display,
                     "category": category,
                     "count": 0,
@@ -152,7 +152,7 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
             a.confidence_score,
             a.review_required
         FROM email_analysis a
-        WHERE a.account_id = $4
+        WHERE a.account_id = $3
           AND NOT (a.label_ids ?| ARRAY['TRASH', 'SPAM'])
           {date_filter_clause}
     ),
@@ -186,22 +186,22 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
             *date_filter_params,
         )
 
-    groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for row in rows:
         from_email = row["from_email"] or ""
         sender_display = _extract_sender_display(from_email)
         sender_key = _sender_group_key(from_email)
-        bucket = str(row["bucket"])
+        source_bucket = str(row["bucket"])
         category = str(row["category"])
         label_group = _detect_label_group(row["label_ids"] or [])
-        key = (bucket, label_group, sender_key, category)
+        bucket = _triage_bucket(source_bucket=source_bucket, label_group=label_group)
+        key = (bucket, sender_key, category)
 
         if key not in groups:
             groups[key] = {
-                "group_id": f"{bucket}|{label_group}|{sender_key}|{category}",
+                "group_id": f"{bucket}|{sender_key}|{category}",
                 "bucket": bucket,
-                "label_group": label_group,
                 "sender": sender_display,
                 "category": category,
                 "count": 0,
@@ -408,16 +408,16 @@ def _normalize_remove_label_ids(remove_label_ids: list[str]) -> list[str]:
     return list(dict.fromkeys(normalized))
 
 
-def _build_triage_response(groups: dict[tuple[str, str, str, str], dict[str, Any]]) -> TriagePreviewResponse:
+def _build_triage_response(groups: dict[tuple[str, str, str], dict[str, Any]]) -> TriagePreviewResponse:
     """그룹 집계 데이터를 API 응답 모델 형태로 변환합니다."""
-    nested: dict[str, dict[str, dict[str, dict[str, Any]]]] = {"unread": {}, "read": {}}
+    bucket_order = ["unread", "read", "important", "starred", "label"]
+    nested: dict[str, dict[str, dict[str, Any]]] = {bucket: {} for bucket in bucket_order}
     total_count = 0
 
     for group in groups.values():
         count = int(group["count"])
         confidence_sum = float(group["confidence_sum"])
         bucket = str(group["bucket"])
-        label_group = str(group["label_group"])
         sender = str(group["sender"])
         category = str(group["category"])
         category_item = {
@@ -430,51 +430,39 @@ def _build_triage_response(groups: dict[tuple[str, str, str, str], dict[str, Any
             "sample_subjects": [str(subject) for subject in group["sample_subjects"]],
         }
 
-        bucket_map = nested[bucket]
-        label_map = bucket_map.setdefault(label_group, {})
-        sender_map = label_map.setdefault(sender, {})
+        sender_map = nested[bucket].setdefault(sender, {})
         sender_map[category] = category_item
 
         total_count += count
 
     buckets: list[BucketGroupItem] = []
-    for bucket_name in ["unread", "read"]:
-        label_items: list[LabelGroupItem] = []
+    for bucket_name in bucket_order:
+        sender_map = nested[bucket_name]
+        sender_items: list[SenderGroupItem] = []
         bucket_total = 0
-        for label_group, senders in sorted(
-            nested[bucket_name].items(),
-            key=lambda item: sum(cat["count"] for sender in item[1].values() for cat in sender.values()),
+        for sender, categories in sorted(
+            sender_map.items(),
+            key=lambda item: sum(cat["count"] for cat in item[1].values()),
             reverse=True,
         ):
-            sender_items: list[SenderGroupItem] = []
-            label_total = 0
-            for sender, categories in sorted(
-                senders.items(),
-                key=lambda item: sum(cat["count"] for cat in item[1].values()),
-                reverse=True,
-            ):
-                category_items = [
-                    TriageGroupItem(
-                        category=category,
-                        count=category_data["count"],
-                        avg_confidence_score=category_data["avg_confidence_score"],
-                        review_required_count=category_data["review_required_count"],
-                        message_ids=category_data["message_ids"],
-                        message_links=category_data["message_links"],
-                        sample_subjects=category_data["sample_subjects"],
-                    )
-                    for category, category_data in sorted(categories.items(), key=lambda item: item[1]["count"], reverse=True)
-                ]
-                sender_count = sum(item.count for item in category_items)
-                label_total += sender_count
-                sender_items.append(SenderGroupItem(sender=sender, count=sender_count, categories=category_items))
+            category_items = [
+                TriageGroupItem(
+                    category=category,
+                    count=category_data["count"],
+                    avg_confidence_score=category_data["avg_confidence_score"],
+                    review_required_count=category_data["review_required_count"],
+                    message_ids=category_data["message_ids"],
+                    message_links=category_data["message_links"],
+                    sample_subjects=category_data["sample_subjects"],
+                )
+                for category, category_data in sorted(categories.items(), key=lambda item: item[1]["count"], reverse=True)
+            ]
+            sender_count = sum(item.count for item in category_items)
+            bucket_total += sender_count
+            sender_items.append(SenderGroupItem(sender=sender, count=sender_count, categories=category_items))
 
-            sender_items.sort(key=lambda item: item.count, reverse=True)
-            label_items.append(LabelGroupItem(label_group=label_group, count=label_total, senders=sender_items))
-            bucket_total += label_total
-
-        label_items.sort(key=lambda item: item.count, reverse=True)
-        buckets.append(BucketGroupItem(bucket=bucket_name, count=bucket_total, label_groups=label_items))
+        sender_items.sort(key=lambda item: item.count, reverse=True)
+        buckets.append(BucketGroupItem(bucket=bucket_name, count=bucket_total, label_groups=[LabelGroupItem(label_group="normal", count=bucket_total, senders=sender_items)] if sender_items else []))
 
     buckets.sort(key=lambda item: item.count, reverse=True)
     return TriagePreviewResponse(total_count=total_count, buckets=buckets)
@@ -532,6 +520,17 @@ def _detect_label_group(label_ids: list[str] | object) -> str:
     return "normal"
 
 
+def _triage_bucket(source_bucket: str, label_group: str) -> str:
+    """Map raw inbox/read state + label group to the five UI groups."""
+    if label_group == "important":
+        return "important"
+    if label_group == "starred":
+        return "starred"
+    if label_group == "user_labeled":
+        return "label"
+    return source_bucket if source_bucket in {"read", "unread"} else "read"
+
+
 def _build_gmail_message_link(message_id: str) -> str:
     """gmail_message_id를 Gmail 웹 링크로 변환합니다."""
     return f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
@@ -546,7 +545,7 @@ def _build_date_filter_clause(payload: TriagePreviewDbRequest) -> tuple[str, lis
         if not payload.start_date or not payload.end_date:
             return "", []
         return (
-            " AND to_timestamp((r.internal_date::bigint) / 1000.0) BETWEEN $5::date AND ($6::date + INTERVAL '1 day' - INTERVAL '1 second')",
+            " AND to_timestamp((r.internal_date::bigint) / 1000.0) BETWEEN $4::date AND ($5::date + INTERVAL '1 day' - INTERVAL '1 second')",
             [payload.start_date, payload.end_date],
         )
 
@@ -556,7 +555,6 @@ def _build_date_filter_clause(payload: TriagePreviewDbRequest) -> tuple[str, lis
         return "", []
 
     return (
-        " AND to_timestamp((r.internal_date::bigint) / 1000.0) <= NOW() - make_interval(months => $5::int)",
+        " AND to_timestamp((r.internal_date::bigint) / 1000.0) <= NOW() - make_interval(months => $4::int)",
         [months],
     )
-

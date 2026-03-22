@@ -29,6 +29,7 @@ class ManagedGoogleTokenResponse(BaseModel):
     token_type: str
     expires_at: datetime
     refreshed: bool = False
+    account_id: str | None = None
 
 
 class EnsureTokenRequest(BaseModel):

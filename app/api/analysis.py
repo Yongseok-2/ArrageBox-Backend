@@ -46,7 +46,7 @@ async def get_recent_analysis(
     WHERE a.account_id = $1
       {date_filter_clause}
     ORDER BY a.analyzed_at DESC
-    LIMIT ${limit_placeholder}
+    LIMIT ${limit_placeholder}::int
     """
 
     pool = get_db_pool()
@@ -80,7 +80,10 @@ def _build_analysis_date_filter_clause(payload: EmailAnalysisRecentRequest) -> t
     if payload.date_filter == "range":
         if not payload.start_date or not payload.end_date:
             return "", []
-        return (" AND a.internal_date <> '' AND to_timestamp((a.internal_date::bigint) / 1000.0) BETWEEN $2::date AND ($3::date + INTERVAL '1 day' - INTERVAL '1 second')", [payload.start_date, payload.end_date])
+        return (
+            " AND a.internal_date <> '' AND to_timestamp((a.internal_date::bigint) / 1000.0) BETWEEN $2::date AND ($3::date + INTERVAL '1 day' - INTERVAL '1 second')",
+            [payload.start_date, payload.end_date],
+        )
 
     months_map = {"1m": 1, "3m": 3, "6m": 6}
     months = months_map.get(payload.date_filter)
@@ -89,5 +92,5 @@ def _build_analysis_date_filter_clause(payload: EmailAnalysisRecentRequest) -> t
 
     return (
         " AND a.internal_date <> '' AND to_timestamp((a.internal_date::bigint) / 1000.0) <= NOW() - make_interval(months => $2::int)",
-        [str(months)],
+        [months],
     )

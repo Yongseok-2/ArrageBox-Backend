@@ -64,6 +64,7 @@ def _to_public_token_response(token_data: dict) -> ManagedGoogleTokenResponse:
         token_type=token_data["token_type"],
         expires_at=token_data["expires_at"],
         refreshed=token_data.get("refreshed", False),
+        account_id=token_data.get("account_id"),
     )
 
 

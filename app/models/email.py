@@ -49,13 +49,13 @@ class SenderGroupItem(BaseModel):
 
 
 class LabelGroupItem(BaseModel):
-    label_group: Literal["important", "starred", "user_labeled", "normal"]
+    label_group: Literal["normal"]
     count: int
     senders: list[SenderGroupItem] = Field(default_factory=list)
 
 
 class BucketGroupItem(BaseModel):
-    bucket: Literal["unread", "read"]
+    bucket: Literal["unread", "read", "important", "starred", "label"]
     count: int
     label_groups: list[LabelGroupItem] = Field(default_factory=list)
 

@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 PEOPLE_SCOPE = "https://www.googleapis.com/auth/contacts.readonly"
 DEFAULT_SCOPES = f"{GMAIL_SCOPE} {PEOPLE_SCOPE}"
@@ -99,6 +100,22 @@ class GoogleOAuthService:
             token_data["refresh_token"] = refresh_token
         return self._append_expiry(token_data, refreshed=True)
 
+    async def fetch_account_id(self, access_token: str) -> str | None:
+        """Resolve the signed-in Gmail address from the Gmail profile endpoint."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.get(GOOGLE_GMAIL_PROFILE_URL, headers=headers)
+        except httpx.HTTPError:
+            return None
+
+        if response.status_code >= 400:
+            return None
+
+        data = response.json()
+        email_address = str(data.get("emailAddress", "")).strip()
+        return email_address or None
+
     async def ensure_valid_access_token(
         self,
         access_token: str | None,
@@ -112,7 +129,7 @@ class GoogleOAuthService:
             and expires_at
             and expires_at.astimezone(UTC) > now + timedelta(seconds=60)
         ):
-            return {
+            token_data = {
                 "access_token": access_token,
                 "refresh_token": refresh_token,
                 "expires_in": int((expires_at.astimezone(UTC) - now).total_seconds()),
@@ -121,7 +138,16 @@ class GoogleOAuthService:
                 "expires_at": expires_at.astimezone(UTC),
                 "refreshed": False,
             }
-        return await self.refresh_access_token(refresh_token)
+            account_id = await self.fetch_account_id(access_token)
+            if account_id:
+                token_data["account_id"] = account_id
+            return token_data
+        token_data = await self.refresh_access_token(refresh_token)
+        if token_data.get("access_token"):
+            account_id = await self.fetch_account_id(str(token_data["access_token"]))
+            if account_id:
+                token_data["account_id"] = account_id
+        return token_data
 
     async def _request_token(self, payload: dict[str, str]) -> dict[str, Any]:
         """Google OAuth 토큰 엔드포인트에 요청을 보내고 결과를 반환한다."""
@@ -148,6 +174,11 @@ class GoogleOAuthService:
             )
 
         token_data: dict[str, Any] = response.json()
+        access_token = str(token_data.get("access_token", "")).strip()
+        if access_token:
+            account_id = await self.fetch_account_id(access_token)
+            if account_id:
+                token_data["account_id"] = account_id
         return token_data
 
 
