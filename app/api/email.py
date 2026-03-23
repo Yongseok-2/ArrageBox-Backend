@@ -1,5 +1,6 @@
 ﻿from email.utils import parseaddr
 from typing import Any
+import json
 
 from fastapi import APIRouter, Cookie, HTTPException, status
 
@@ -376,7 +377,10 @@ async def _sync_label_ids_in_db(
                 labels.discard(str(label).upper())
             for label in add_label_ids:
                 labels.add(str(label).upper())
-            await conn.execute(update_sql, account_id, row["gmail_message_id"], list(labels))
+
+            labels_json_str = json.dumps(list(labels))
+
+            await conn.execute(update_sql, account_id, row["gmail_message_id"], labels_json_str)
 
 
 async def _upsert_gmail_label_metadata(
