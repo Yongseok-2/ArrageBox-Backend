@@ -1,10 +1,14 @@
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from app.core.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_CATEGORIES = {
     "work_action",
@@ -39,13 +43,51 @@ class EmailAnalyzer:
 
     async def analyze_email(self, email: dict[str, Any]) -> dict[str, Any]:
         """Run rule-based analysis and fallback to Gemini for ambiguous cases."""
+        message_id = str(email.get("gmail_message_id") or "")
+        subject = str(email.get("subject") or "")
+        from_email = str(email.get("from_email") or "")
+        logger.info(
+            "Analyze email start: message_id=%s subject=%s from=%s",
+            message_id,
+            subject[:80],
+            from_email[:80],
+        )
+
         rule_result = self._analyze_with_rules(email)
+        logger.debug(
+            "Rule analysis result: message_id=%s source=%s category=%s confidence=%.4f review_required=%s",
+            message_id,
+            rule_result["analysis_source"],
+            rule_result["category"],
+            float(rule_result["confidence_score"]),
+            bool(rule_result["review_required"]),
+        )
         if not self._is_ambiguous(rule_result):
+            logger.info(
+                "Analyze email done by rules: message_id=%s category=%s confidence=%.4f",
+                message_id,
+                rule_result["category"],
+                float(rule_result["confidence_score"]),
+            )
             return rule_result
 
-        gemini_result = await self._analyze_with_gemini(email, rule_result)
-        if gemini_result is not None:
-            return gemini_result
+        # Gemini 호출은 현재 비활성화 상태로 유지한다.
+        # 필요할 때 아래 흐름을 다시 활성화하면 ambiguous 메일을 Gemini가 재분석한다.
+        # logger.info(
+        #     "Rule analysis ambiguous, trying Gemini: message_id=%s category=%s confidence=%.4f",
+        #     message_id,
+        #     rule_result["category"],
+        #     float(rule_result["confidence_score"]),
+        # )
+        # gemini_result = await self._analyze_with_gemini(email, rule_result)
+        # if gemini_result is not None:
+        #     logger.info(
+        #         "Analyze email done by Gemini: message_id=%s category=%s confidence=%.4f",
+        #         message_id,
+        #         gemini_result["category"],
+        #         float(gemini_result["confidence_score"]),
+        #     )
+        #     return gemini_result
 
         rule_result["review_required"] = True
         return rule_result
@@ -61,6 +103,15 @@ class EmailAnalyzer:
         urgency_score = self._score_urgency(text=text)
         keywords = self._extract_keywords(text=text)
         summary = self._build_summary(subject=subject, snippet=snippet)
+
+        logger.debug(
+            "Rules analyzed: message_id=%s category=%s confidence=%.4f urgency=%s keywords=%s",
+            email.get("gmail_message_id"),
+            category,
+            confidence,
+            urgency_score,
+            keywords,
+        )
 
         return {
             "gmail_message_id": email.get("gmail_message_id"),
@@ -108,11 +159,21 @@ class EmailAnalyzer:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError:
+            logger.warning(
+                "Gemini request failed: message_id=%s model=%s",
+                fallback.get("gmail_message_id"),
+                settings.gemini_model,
+            )
             return None
 
         data = response.json()
         parsed = self._parse_gemini_json(data)
         if parsed is None:
+            logger.warning(
+                "Gemini response parse failed: message_id=%s model=%s",
+                fallback.get("gmail_message_id"),
+                settings.gemini_model,
+            )
             return None
 
         category = parsed.get("category", fallback["category"])
@@ -125,6 +186,15 @@ class EmailAnalyzer:
         keywords = parsed.get("keywords", fallback["keywords"])
         if not isinstance(keywords, list):
             keywords = fallback["keywords"]
+
+        logger.debug(
+            "Gemini parsed: message_id=%s category=%s confidence=%.4f urgency=%s keywords=%s",
+            fallback.get("gmail_message_id"),
+            category,
+            confidence_score,
+            urgency_score,
+            keywords,
+        )
 
         return {
             "gmail_message_id": fallback["gmail_message_id"],
@@ -156,6 +226,14 @@ class EmailAnalyzer:
 
     def _build_gemini_prompt(self, email: dict[str, Any], fallback: dict[str, Any]) -> str:
         """Build prompt for Gemini classification request."""
+        logger.debug(
+            "Gemini prompt prepared: message_id=%s subject=%s from=%s fallback_category=%s fallback_confidence=%.4f",
+            email.get("gmail_message_id"),
+            str(email.get("subject") or "")[:80],
+            str(email.get("from_email") or "")[:80],
+            fallback["category"],
+            float(fallback["confidence_score"]),
+        )
         return (
             "You are classifying a Gmail message for inbox triage.\n"
             "Return JSON only with fields: category, urgency_score, summary, keywords, confidence_score.\n"
@@ -174,27 +252,49 @@ class EmailAnalyzer:
 
         keyword_rules: dict[str, list[str]] = {
             "finance_billing": [
-                "invoice", "receipt", "billing", "payment", "refund", "영수증", "결제", "청구", "환불", "정산",
+                "invoice", "receipt", "billing", "payment", "refund", "statement", "tax", "banking", 
+                "credit card", "premium", "subscription", "automatic transfer", "overdue", "wire transfer",
+                "영수증", "결제", "청구", "환불", "정산", "명세서", "카드", "납부", "지로", "세금", "세무", 
+                "입금", "출금", "자동이체", "가상계좌", "미납", "독촉", "원천징수", "현금영수증", "금액", "고지서"
             ],
             "work_action": [
-                "meeting", "schedule", "calendar", "action required", "jira", "confluence", "회의", "일정", "요청", "조치", "승인",
+                "meeting", "schedule", "calendar", "action required", "jira", "confluence", "slack", "zoom",
+                "resume", "interview", "hcm", "workday", "pr", "mr", "ticket", "approval", "urgent", 
+                "deadline", "review", "submission", "application", "feedback",
+                "회의", "일정", "요청", "조치", "승인", "반려", "검토", "제출", "이력서", "지원", "면접", 
+                "채용", "공고", "주간보고", "업무보고", "협업", "공유", "기획안", "보고서", "긴급", "협의", "발령"
             ],
             "account_security": [
-                "security", "verify", "password", "login alert", "authentication", "otp", "인증", "보안", "로그인", "비밀번호", "인증번호", "의심",
+                "security", "verify", "password", "login alert", "authentication", "otp", "mfa", "2fa",
+                "recovery", "reset", "suspicious", "blocked", "login attempt", "device", "ip", "unauthorized",
+                "인증", "보안", "로그인", "비밀번호", "인증번호", "의심", "차단", "해제", "기기", "접속", 
+                "접근", "복구", "변경", "알림", "해외로그인", "아이피", "본인확인", "탈퇴", "휴면"
             ],
             "shopping_delivery": [
-                "shipping", "delivered", "order", "tracking", "주문", "배송", "출고", "택배", "운송장", "구매",
+                "shipping", "delivered", "order", "tracking", "shipment", "dispatch", "out of stock", 
+                "return", "cancellation", "courier", "logistics", "fedex", "ups", "dhl", "tracking number",
+                "주문", "배송", "출고", "택배", "운송장", "구매", "쇼핑", "품절", "취소", "물류", "집하", 
+                "배송완료", "도착", "수령", "반품", "교환", "쇼핑몰", "장바구니"
             ],
             "newsletter_promo": [
-                "sale", "discount", "promotion", "unsubscribe", "newsletter", "광고", "할인", "이벤트", "뉴스레터", "구독해지",
+                "sale", "discount", "promotion", "unsubscribe", "newsletter", "coupon", "benefit", 
+                "offer", "limited", "ad", "marketing", "survey", "webinar", "free", "membership", "loyalty",
+                "광고", "할인", "이벤트", "뉴스레터", "구독해지", "쿠폰", "혜택", "특가", "한정", "마케팅", 
+                "설문", "무료", "멤버십", "안내", "소식지", "프로모션", "신제품", "강연"
             ],
             "social_community": [
-                "facebook", "discord", "community", "follower", "댓글", "커뮤니티", "알림", "소셜",
+                "facebook", "discord", "community", "follower", "mention", "tag", "invite", "comment", 
+                "message", "notice", "notification", "thread", "sns", "youtube", "instagram", "reddit",
+                "댓글", "커뮤니티", "알림", "소셜", "언급", "태그", "팔로워", "좋아요", "구독", "초청", 
+                "초대", "게시글", "공지사항", "카페", "밴드", "답글"
             ],
             "personal": [
-                "mom", "dad", "family", "friend", "개인", "안부", "지인", "친구", "가족",
-            ],
-        }
+                "mom", "dad", "family", "friend", "brother", "sister", "wedding", "invitation", 
+                "congratulations", "birthday", "lunch", "dinner", "rsvp", "trip", "vacation",
+                "개인", "안부", "지인", "친구", "가족", "결혼", "청첩장", "부고", "축하", "생일", 
+                "모임", "점심", "저녁", "회신", "회포", "여행", "휴가", "사적"
+    ]
+}
 
         for category, words in keyword_rules.items():
             for word in words:

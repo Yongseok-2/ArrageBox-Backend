@@ -62,12 +62,3 @@ CREATE TABLE IF NOT EXISTS gmail_labels (
 ALTER TABLE gmail_labels ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT 'unknown';
 CREATE INDEX IF NOT EXISTS idx_gmail_labels_account_id ON gmail_labels(account_id);
 CREATE INDEX IF NOT EXISTS idx_gmail_labels_account_id_label_name ON gmail_labels(account_id, label_name);
-
-CREATE TABLE IF NOT EXISTS reply_memory (
-    id BIGSERIAL PRIMARY KEY,
-    from_email TEXT,
-    intent TEXT,
-    user_reply TEXT NOT NULL,
-    reply_embedding vector(768),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);

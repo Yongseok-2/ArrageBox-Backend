@@ -50,8 +50,6 @@ DO UPDATE SET
     date_header = EXCLUDED.date_header,
     snippet = EXCLUDED.snippet,
     internal_date = EXCLUDED.internal_date,
-    label_ids = EXCLUDED.label_ids,
-    payload_json = EXCLUDED.payload_json,
     processed_at = EXCLUDED.processed_at,
     sender_email = EXCLUDED.sender_email,
     category = EXCLUDED.category,

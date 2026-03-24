@@ -17,9 +17,9 @@ class GmailService:
         user_id: str = "me",
         max_results: int = 20,
     ) -> list[dict[str, Any]]:
-        """Fetch inbox messages for initial sync and return normalized message details."""
+        """Fetch all mail messages except trash/spam for initial sync."""
         headers = {"Authorization": f"Bearer {access_token}"}
-        query = "in:inbox -in:trash -in:spam"
+        query = "-in:trash -in:spam"
 
         async with httpx.AsyncClient(timeout=20) as client:
             message_ids = await self._list_all_message_ids(

@@ -38,6 +38,7 @@ class TriageGroupItem(BaseModel):
     avg_confidence_score: float = Field(..., ge=0.0, le=1.0)
     review_required_count: int = Field(default=0, ge=0)
     message_ids: list[str] = Field(default_factory=list)
+    message_dates: list[str] = Field(default_factory=list)
     message_links: list[str] = Field(default_factory=list)
     sample_subjects: list[str] = Field(default_factory=list)
 

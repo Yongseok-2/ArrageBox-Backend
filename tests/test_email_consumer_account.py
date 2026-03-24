@@ -48,7 +48,7 @@ def test_upsert_email_persists_combined_payload() -> None:
         "date_header": "Wed, 19 Mar 2026 00:00:00 +0000",
         "snippet": "snippet",
         "internal_date": "1234567890",
-        "label_ids": ["INBOX"],
+        "label_ids": ["IMPORTANT", "STARRED"],
         "raw": {"payload": {"body": "secret"}},
     }
 
@@ -57,5 +57,6 @@ def test_upsert_email_persists_combined_payload() -> None:
     _, args = fake_pool.conn.calls[0]
     assert args[0] == "user@example.com"
     assert args[1] == "msg-1"
+    assert args[9] == '["IMPORTANT", "STARRED"]'
     assert args[10] == '{"payload": {"body": "secret"}}'
     assert args[13] == "other"
