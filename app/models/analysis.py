@@ -8,6 +8,8 @@ class EmailAnalysisItem(BaseModel):
     gmail_message_id: str
     subject: str | None = None
     from_email: str | None = None
+    internal_date: str | None = None
+    received_at: datetime | None = None
     category: str
     urgency_score: int = Field(..., ge=0, le=100)
     summary: str

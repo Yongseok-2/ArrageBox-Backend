@@ -1,4 +1,6 @@
-﻿from fastapi import APIRouter, Query
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Query
 
 from app.core.db import get_db_pool
 from app.models.analysis import EmailAnalysisItem, EmailAnalysisListResponse, EmailAnalysisRecentRequest
@@ -34,6 +36,7 @@ async def get_recent_analysis(
         a.gmail_message_id,
         a.subject,
         a.from_email,
+        a.internal_date,
         a.category,
         a.urgency_score,
         a.summary,
@@ -59,6 +62,8 @@ async def get_recent_analysis(
             gmail_message_id=row["gmail_message_id"],
             subject=row["subject"],
             from_email=row["from_email"],
+            internal_date=row["internal_date"],
+            received_at=_parse_internal_date(row["internal_date"]),
             category=row["category"],
             urgency_score=row["urgency_score"],
             summary=row["summary"],
@@ -71,6 +76,14 @@ async def get_recent_analysis(
         for row in rows
     ]
     return EmailAnalysisListResponse(items=items, count=len(items))
+
+
+def _parse_internal_date(internal_date: str | None) -> datetime | None:
+    if not internal_date:
+        return None
+    if not str(internal_date).isdigit():
+        return None
+    return datetime.fromtimestamp(int(internal_date) / 1000.0, tz=UTC)
 
 
 def _build_analysis_date_filter_clause(payload: EmailAnalysisRecentRequest) -> tuple[str, list[str]]:
