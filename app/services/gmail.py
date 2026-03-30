@@ -6,6 +6,7 @@ import httpx
 from fastapi import HTTPException, status
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
+TRASH_CONCURRENCY_LIMIT = 20
 
 
 class GmailService:
@@ -240,16 +241,19 @@ class GmailService:
     ) -> dict[str, list[str]]:
         """Move messages to trash and split failed vs already-missing IDs."""
         headers = {"Authorization": f"Bearer {access_token}"}
-        async with httpx.AsyncClient(timeout=20) as client:
-            tasks = [
-                self._trash_one(
+        semaphore = asyncio.Semaphore(TRASH_CONCURRENCY_LIMIT)
+
+        async def guarded_trash_one(message_id: str) -> Literal["ok", "missing", "failed"]:
+            async with semaphore:
+                return await self._trash_one(
                     client=client,
                     headers=headers,
                     user_id=user_id,
                     message_id=message_id,
                 )
-                for message_id in message_ids
-            ]
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            tasks = [guarded_trash_one(message_id) for message_id in message_ids]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
         failed_ids: list[str] = []

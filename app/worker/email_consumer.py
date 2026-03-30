@@ -65,6 +65,9 @@ DO UPDATE SET
 
 logger = logging.getLogger(__name__)
 
+CONSUMER_BATCH_SIZE = 100
+CONSUMER_POLL_TIMEOUT_MS = 1000
+
 
 def safe_deserialize(value: bytes) -> dict[str, Any] | None:
     """Deserialize Kafka bytes safely; skip invalid payload."""
@@ -128,6 +131,56 @@ async def store_temp_email_body(email: dict[str, Any]) -> str:
     return key
 
 
+def _chunk_items(items: list[Any], chunk_size: int) -> list[list[Any]]:
+    if chunk_size <= 0:
+        return [items]
+    return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
+async def process_email_batch(pool: asyncpg.Pool, emails: list[dict[str, Any]]) -> None:
+    """Persist a batch of emails after rule analysis and optional Gemini batch fallback."""
+    if not emails:
+        return
+
+    temp_keys: list[str] = []
+    try:
+        for email_payload in emails:
+            temp_key = await store_temp_email_body(email_payload)
+            temp_keys.append(temp_key)
+            await upsert_email(pool, email_payload, analysis=None)
+
+        analyses: dict[str, dict[str, Any]] = {}
+        other_emails: list[dict[str, Any]] = []
+        other_fallbacks: list[dict[str, Any]] = []
+
+        for email_payload in emails:
+            rule_result = email_analyzer.analyze_email_rules(email_payload)
+            message_id = str(email_payload.get("gmail_message_id", ""))
+            analyses[message_id] = rule_result
+            if rule_result.get("category") == "other":
+                other_emails.append(email_payload)
+                other_fallbacks.append(rule_result)
+
+        if settings.gemini_enabled and other_emails:
+            for email_chunk, fallback_chunk in zip(
+                _chunk_items(other_emails, settings.gemini_batch_size),
+                _chunk_items(other_fallbacks, settings.gemini_batch_size),
+            ):
+                gemini_results = await email_analyzer.analyze_other_emails_with_gemini(
+                    emails=email_chunk,
+                    fallbacks=fallback_chunk,
+                )
+                analyses.update(gemini_results)
+
+        for email_payload in emails:
+            message_id = str(email_payload.get("gmail_message_id", ""))
+            analysis_payload = analyses.get(message_id)
+            await upsert_email(pool, email_payload, analysis=analysis_payload)
+    finally:
+        for temp_key in temp_keys:
+            await redis_temp_body_store.delete(temp_key)
+
+
 async def run_consumer() -> None:
     """Consume Kafka messages and persist combined email records."""
     pool = await asyncpg.create_pool(dsn=settings.postgres_dsn, min_size=1, max_size=5)
@@ -141,21 +194,26 @@ async def run_consumer() -> None:
     )
     await consumer.start()
     try:
-        async for msg in consumer:
-            email_payload = msg.value
-            if not email_payload:
-                continue
-            if not has_valid_account_id(email_payload):
-                logger.warning("Skip payload without valid account_id")
+        while True:
+            records = await consumer.getmany(
+                timeout_ms=CONSUMER_POLL_TIMEOUT_MS,
+                max_records=CONSUMER_BATCH_SIZE,
+            )
+            batch_payloads: list[dict[str, Any]] = []
+            for topic_partition_records in records.values():
+                for msg in topic_partition_records:
+                    email_payload = msg.value
+                    if not email_payload:
+                        continue
+                    if not has_valid_account_id(email_payload):
+                        logger.warning("Skip payload without valid account_id")
+                        continue
+                    batch_payloads.append(email_payload)
+
+            if not batch_payloads:
                 continue
 
-            temp_key = await store_temp_email_body(email_payload)
-            try:
-                await upsert_email(pool, email_payload, analysis=None)
-                analysis_payload = await email_analyzer.analyze_email(email_payload)
-                await upsert_email(pool, email_payload, analysis=analysis_payload)
-            finally:
-                await redis_temp_body_store.delete(temp_key)
+            await process_email_batch(pool, batch_payloads)
     finally:
         await consumer.stop()
         await pool.close()
