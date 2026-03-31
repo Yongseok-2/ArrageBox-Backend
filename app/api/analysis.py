@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+﻿from datetime import UTC, datetime
 
 from fastapi import APIRouter, Query
 
@@ -107,3 +107,4 @@ def _build_analysis_date_filter_clause(payload: EmailAnalysisRecentRequest) -> t
         " AND a.internal_date <> '' AND to_timestamp((a.internal_date::bigint) / 1000.0) <= NOW() - make_interval(months => $2::int)",
         [months],
     )
+

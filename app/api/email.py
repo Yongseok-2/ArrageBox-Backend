@@ -41,7 +41,7 @@ def _resolve_access_token(body_token: str | None, cookie_token: str | None) -> s
     return token
 
 
-@router.post("/sync", response_model=EmailSyncResponse, summary="????? ?? ???")
+@router.post("/sync", response_model=EmailSyncResponse, summary="받은편지함 메일 동기화")
 async def sync_unread_emails(payload: EmailSyncRequest, access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name)) -> EmailSyncResponse:
     access_token = _resolve_access_token(payload.access_token, access_cookie)
     inbox_result = await gmail_service.fetch_unread_emails(access_token=access_token, user_id=payload.user_id, max_results=payload.max_results)
@@ -61,7 +61,7 @@ async def sync_unread_emails(payload: EmailSyncRequest, access_cookie: str | Non
     )
 
 
-@router.post("/triage/preview", response_model=TriagePreviewResponse, summary="?? ?? ????")
+@router.post("/triage/preview", response_model=TriagePreviewResponse, summary="실시간 트리아지 미리보기")
 async def preview_triage_groups(payload: TriagePreviewRequest, access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name)) -> TriagePreviewResponse:
     access_token = _resolve_access_token(payload.access_token, access_cookie)
     triage_data = await gmail_service.fetch_triage_emails(access_token=access_token, user_id=payload.user_id, max_unread=payload.max_unread, max_read=payload.max_read)
@@ -70,30 +70,23 @@ async def preview_triage_groups(payload: TriagePreviewRequest, access_cookie: st
     for source_bucket, items in [("unread", triage_data["unread"]), ("read", triage_data["read"])]:
         for email in items:
             analysis = await email_analyzer.analyze_email(email)
-            sender_display = _extract_sender_display(email.get("from_email", ""))
-            category = analysis["category"]
-            label_groups = _detect_label_groups(email.get("label_ids", []))
-            message_date = _parse_internal_date_to_iso(email.get("internal_date"))
-            for bucket in _triage_buckets_for_email(source_bucket=source_bucket, label_groups=label_groups):
-                key = (bucket, sender_display, category)
-                if key not in groups:
-                    groups[key] = {"group_id": f"{bucket}|{sender_display}|{category}", "bucket": bucket, "sender_display": sender_display, "category": category, "count": 0, "confidence_sum": 0.0, "review_required_count": 0, "message_ids": [], "message_dates": [], "sample_subjects": []}
-                group = groups[key]
-                group["count"] += 1
-                group["confidence_sum"] += float(analysis.get("confidence_score", 0.0))
-                if analysis.get("review_required", False):
-                    group["review_required_count"] += 1
-                message_id = str(email.get("gmail_message_id", ""))
-                group["message_ids"].append(message_id)
-                if message_date:
-                    group["message_dates"].append(message_date)
-                if len(group["sample_subjects"]) < 3:
-                    group["sample_subjects"].append(email.get("subject", ""))
+            _accumulate_triage_group(
+                groups=groups,
+                source_bucket=source_bucket,
+                from_email=email.get("from_email", ""),
+                category=analysis["category"],
+                label_ids=email.get("label_ids", []),
+                internal_date=email.get("internal_date"),
+                confidence_score=analysis.get("confidence_score", 0.0),
+                review_required=analysis.get("review_required", False),
+                message_id=email.get("gmail_message_id", ""),
+                subject=email.get("subject", ""),
+            )
 
     return _build_triage_response(groups=groups)
 
 
-@router.post("/triage/preview-db", response_model=TriagePreviewResponse, summary="DB ?? ?? ?? ????")
+@router.post("/triage/preview-db", response_model=TriagePreviewResponse, summary="DB 기반 트리아지 미리보기")
 async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> TriagePreviewResponse:
     date_filter_clause, date_filter_params = _build_date_filter_clause(payload)
     query = f"""
@@ -120,33 +113,23 @@ async def preview_triage_groups_from_db(payload: TriagePreviewDbRequest) -> Tria
 
     groups: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
-        from_email = row["from_email"] or ""
-        sender_display = _extract_sender_display(from_email)
-        source_bucket = str(row["bucket"])
-        category = str(row["category"])
-        label_groups = _detect_label_groups(row["label_ids"] or [])
-        message_date = _parse_internal_date_to_iso(row["internal_date"])
-        for bucket in _triage_buckets_for_email(source_bucket=source_bucket, label_groups=label_groups):
-            key = (bucket, sender_display, category)
-            if key not in groups:
-                groups[key] = {"group_id": f"{bucket}|{sender_display}|{category}", "bucket": bucket, "sender_display": sender_display, "category": category, "count": 0, "confidence_sum": 0.0, "review_required_count": 0, "message_ids": [], "message_dates": [], "sample_subjects": []}
-            group = groups[key]
-            group["count"] += 1
-            group["confidence_sum"] += float(row["confidence_score"] or 0.0)
-            if bool(row["review_required"]):
-                group["review_required_count"] += 1
-            message_id = str(row["gmail_message_id"])
-            group["message_ids"].append(message_id)
-            if message_date:
-                group["message_dates"].append(message_date)
-            subject = str(row["subject"] or "")
-            if subject:
-                group["sample_subjects"].append(subject)
+        _accumulate_triage_group(
+            groups=groups,
+            source_bucket=str(row["bucket"]),
+            from_email=row["from_email"] or "",
+            category=str(row["category"]),
+            label_ids=row["label_ids"] or [],
+            internal_date=row["internal_date"],
+            confidence_score=float(row["confidence_score"] or 0.0),
+            review_required=bool(row["review_required"]),
+            message_id=str(row["gmail_message_id"]),
+            subject=str(row["subject"] or ""),
+        )
 
     return _build_triage_response(groups=groups)
 
 
-@router.post("/triage/action", response_model=BulkActionResponse, summary="?? ?? ??")
+@router.post("/triage/action", response_model=BulkActionResponse, summary="트리아지 일괄 액션 적용")
 async def apply_triage_action(payload: BulkActionRequest, access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name)) -> BulkActionResponse:
     access_token = _resolve_access_token(payload.access_token, access_cookie)
     result = await gmail_service.apply_bulk_action(access_token=access_token, action=payload.action, message_ids=payload.message_ids, user_id=payload.user_id)
@@ -160,7 +143,7 @@ async def apply_triage_action(payload: BulkActionRequest, access_cookie: str | N
     return BulkActionResponse(action=payload.action, processed_count=result["processed_count"], failed_count=len(failed_ids), partial_failed=bool(failed_ids), success_ids=success_ids, failed_ids=failed_ids)
 
 
-@router.post("/labels", response_model=LabelUpdateResponse, summary="?? ?? ???")
+@router.post("/labels", response_model=LabelUpdateResponse, summary="메일 라벨 변경")
 async def update_labels(payload: LabelUpdateRequest, access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name)) -> LabelUpdateResponse:
     access_token = _resolve_access_token(payload.access_token, access_cookie)
     remove_label_ids = _normalize_remove_label_ids(payload.remove_label_ids)
@@ -173,7 +156,7 @@ async def update_labels(payload: LabelUpdateRequest, access_cookie: str | None =
     return LabelUpdateResponse(processed_count=result["processed_count"], failed_count=len(failed_ids), partial_failed=bool(failed_ids), success_ids=success_ids, failed_ids=failed_ids)
 
 
-@router.post("/labels/create", response_model=LabelCreateResponse, summary="??? ?? ??")
+@router.post("/labels/create", response_model=LabelCreateResponse, summary="사용자 라벨 생성")
 async def create_label(payload: LabelCreateRequest, access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name)) -> LabelCreateResponse:
     access_token = _resolve_access_token(payload.access_token, access_cookie)
     created_label = await gmail_service.create_label(access_token=access_token, user_id=payload.user_id, name=payload.name)
@@ -234,6 +217,52 @@ def _normalize_remove_label_ids(remove_label_ids: list[str]) -> list[str]:
     if "INBOX" not in normalized:
         normalized.append("INBOX")
     return list(dict.fromkeys(normalized))
+
+
+def _accumulate_triage_group(
+    groups: dict[tuple[str, str, str], dict[str, Any]],
+    source_bucket: str,
+    from_email: str,
+    category: str,
+    label_ids: list[str] | object,
+    internal_date: Any,
+    confidence_score: float,
+    review_required: bool,
+    message_id: str,
+    subject: str,
+) -> None:
+    """Apply the shared triage grouping rules used by both live and DB previews."""
+    sender_display = _extract_sender_display(from_email)
+    label_groups = _detect_label_groups(label_ids)
+    message_date = _parse_internal_date_to_iso(internal_date)
+
+    for bucket in _triage_buckets_for_email(source_bucket=source_bucket, label_groups=label_groups):
+        key = (bucket, sender_display, category)
+        if key not in groups:
+            groups[key] = {
+                "group_id": f"{bucket}|{sender_display}|{category}",
+                "bucket": bucket,
+                "sender_display": sender_display,
+                "category": category,
+                "count": 0,
+                "confidence_sum": 0.0,
+                "review_required_count": 0,
+                "message_ids": [],
+                "message_dates": [],
+                "sample_subjects": [],
+            }
+        group = groups[key]
+        group["count"] += 1
+        group["confidence_sum"] += float(confidence_score)
+        if review_required:
+            group["review_required_count"] += 1
+        normalized_message_id = str(message_id)
+        group["message_ids"].append(normalized_message_id)
+        if message_date:
+            group["message_dates"].append(message_date)
+        normalized_subject = str(subject)
+        if normalized_subject and len(group["sample_subjects"]) < 3:
+            group["sample_subjects"].append(normalized_subject)
 
 
 def _build_triage_response(groups: dict[tuple[str, str, str], dict[str, Any]]) -> TriagePreviewResponse:

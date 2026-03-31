@@ -1,7 +1,8 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from contextlib import asynccontextmanager
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.analysis import router as analysis_router
@@ -54,6 +55,16 @@ app.add_middleware(
     allow_methods=["*"],               # 모든 HTTP 메서드(GET, POST 등) 허용
     allow_headers=["*"],               # 모든 HTTP 헤더 허용
 )
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = f"{process_time:.6f}"
+    print(f"Request Path: {request.url.path} | Time: {process_time:.4f}s")
+    return response
 
 
 @app.get("/health", summary="헬스체크")
