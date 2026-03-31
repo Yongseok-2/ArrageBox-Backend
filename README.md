@@ -1,55 +1,19 @@
-# ArrangeBox
+# 📬 ArrangeBox
 
-ArrangeBox는 Gmail 메일을 동기화하고, AI 기반으로 분류한 뒤, 사용자가 한 번에 정리할 수 있도록 돕는 메일 트리아지 백엔드 프로젝트입니다. 읽지 않음/읽음 메일을 그룹화하고, 발신자와 카테고리 기준으로 메일을 정리하며, 보관, 삭제, 라벨 변경 같은 액션을 빠르게 수행할 수 있도록 설계했습니다.
+ArrangeBox는 단순히 이메일을 지우는 도구를 넘어, 환경을 생각하는 **디지털 지속가능성**을 실천하는 AI 기반 이메일 정리 서비스입니다.
 
-프로젝트는 비동기 파이프라인 중심으로 동작합니다. Google OAuth로 Gmail에 접근한 뒤 메일을 가져오고, Kafka에 발행한 뒤 Worker가 분석을 수행하며, 결과는 PostgreSQL에 저장됩니다. 원문 payload는 Redis에 짧게 저장한 뒤 처리 후 제거해서 민감한 데이터를 오래 보관하지 않도록 구성했습니다.
+저는 읽지 않은 채 쌓여있는 수만 통의 이메일이 데이터 센터의 에너지를 소모하며 실시간으로 탄소를 배출한다는 점에 주목했습니다. ArrangeBox는 이메일함 구석구석 쌓인 이 메일들을 **'탄소 먼지'**로 정의하고, 사용자가 이를 정리 바구니에 담아 비워냄으로써 마음의 평화와 환경적 가치를 동시에 얻을 수 있도록 돕습니다.
 
-## Feature
+## ✨ Features
+| 기능 | 화면 |
+|:---:|-----|
+| 메인화면 | <img src="https://github.com/user-attachments/assets/b8a51c79-85a4-4bf3-a46b-5db340243298" width="600"/> |
+| 이메일 연동 | <img src="https://github.com/user-attachments/assets/07649539-1011-4bb2-84d8-94c24b413953" width="600"/> |
+| 정리 바구니에 담기 | <img src="https://github.com/user-attachments/assets/4d532f84-9afa-4485-b2df-710ad6f50a68" width="600"/> |
+| 중요 + 별표 작업 | <img src="https://github.com/user-attachments/assets/61ca6b9e-5d0b-4777-9350-807a94e88c33" width="600"/> |
+| 삭제 작업 | <img src="https://github.com/user-attachments/assets/d7386b1b-a899-428b-92e2-920bfccfc57a" width="600"/> |
 
-### 1. Google OAuth 로그인
-
-![기능 GIF 자리](./docs/assets/feature-auth.gif)
-
-설명:
-
-- 여기에 로그인 데모 GIF를 넣어주세요.
-- Google 계정으로 로그인하고 쿠키 기반 인증이 설정되는 흐름을 설명하면 좋습니다.
-
-### 2. 받은편지함 동기화
-
-![기능 GIF 자리](./docs/assets/feature-sync.gif)
-
-설명:
-
-- 여기에 동기화 데모 GIF를 넣어주세요.
-- Gmail 메일을 가져와 Kafka 분석 파이프라인으로 전달하는 흐름을 설명하면 좋습니다.
-
-### 3. AI 트리아지 미리보기
-
-![기능 GIF 자리](./docs/assets/feature-triage.gif)
-
-설명:
-
-- 여기에 트리아지 화면 GIF를 넣어주세요.
-- unread/read, 발신자 그룹, 카테고리 분류가 어떻게 보이는지 설명하면 좋습니다.
-
-### 4. 메일 일괄 정리 액션
-
-![기능 GIF 자리](./docs/assets/feature-actions.gif)
-
-설명:
-
-- 여기에 액션 데모 GIF를 넣어주세요.
-- archive, trash, inbox 해제, 라벨 변경 동작을 설명하면 좋습니다.
-
-### 5. Gmail 라벨 생성 및 적용
-
-![기능 GIF 자리](./docs/assets/feature-labels.gif)
-
-설명:
-
-- 여기에 라벨 생성/적용 GIF를 넣어주세요.
-- 사용자 라벨 생성과 메일 라벨 반영 흐름을 설명하면 좋습니다.
+---
 
 ## Tech Stack
 
@@ -113,15 +77,3 @@ erDiagram
 
 ## Architecture
 
-![아키텍처 이미지 자리](./docs/assets/architecture.png)
-
-추천 다이어그램 흐름:
-
-- Client
-- FastAPI API Server
-- Google OAuth / Gmail API
-- Kafka Producer
-- Kafka Consumer Worker
-- Gemini API
-- Redis
-- PostgreSQL
