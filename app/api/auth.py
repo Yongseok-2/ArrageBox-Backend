@@ -71,7 +71,7 @@ def _to_public_token_response(token_data: dict) -> ManagedGoogleTokenResponse:
 @router.get(
     "/google/authorize",
     response_model=GoogleAuthorizeResponse,
-    summary="Google OAuth 인증 URL 생성",
+    summary="구글 OAuth 인증 URL 생성",
 )
 async def get_google_authorization_url(
     redirect_uri: str | None = Query(default=None),
@@ -88,7 +88,7 @@ async def get_google_authorization_url(
     "/google/token",
     response_model=ManagedGoogleTokenResponse,
     summary="인증 코드로 토큰 발급",
-    description="Google authorization code로 토큰을 발급하고 HttpOnly 쿠키에 저장합니다.",
+    description="구글 인증 코드로 토큰을 발급하고 HttpOnly 쿠키에 저장합니다.",
 )
 async def exchange_google_token(
     payload: TokenExchangeRequest,
@@ -105,8 +105,8 @@ async def exchange_google_token(
 @router.post(
     "/google/refresh",
     response_model=ManagedGoogleTokenResponse,
-    summary="Access Token 갱신",
-    description="Refresh token으로 새 access token을 발급하고 HttpOnly 쿠키를 갱신합니다.",
+    summary="액세스 토큰 갱신",
+    description="리프레시 토큰으로 새 액세스 토큰을 발급하고 HttpOnly 쿠키를 갱신합니다.",
 )
 async def refresh_google_token(
     response: Response,
@@ -129,7 +129,7 @@ async def refresh_google_token(
     "/google/token/ensure",
     response_model=ManagedGoogleTokenResponse,
     summary="유효한 토큰 보장",
-    description="쿠키 또는 요청 본문의 토큰을 검사해 만료 시 자동으로 갱신합니다.",
+    description="쿠키 또는 요청 본문의 토큰을 검사하고, 만료되었으면 자동으로 갱신합니다.",
 )
 async def ensure_google_token(
     response: Response,
@@ -162,7 +162,7 @@ async def ensure_google_token(
     response_model=LogoutResponse,
     status_code=status.HTTP_200_OK,
     summary="로그아웃",
-    description="HttpOnly 인증 쿠키를 삭제하고 로그아웃 상태로 만듭니다.",
+    description="HttpOnly 인증 쿠키를 삭제하고 로그아웃 상태로 전환합니다.",
 )
 async def logout(response: Response) -> LogoutResponse:
     cookie_common = {"path": "/"}
