@@ -6,6 +6,7 @@ import json
 from fastapi import APIRouter, Cookie, HTTPException, status
 
 from app.core.db import get_db_pool
+from app.core.redis_store import redis_temp_body_store
 from app.core.settings import settings
 from app.models.email import (
     BulkActionRequest,
@@ -27,6 +28,7 @@ from app.models.email import (
 from app.services.email_analyzer import email_analyzer
 from app.services.gmail import gmail_service
 from app.services.kafka_producer import kafka_email_producer
+from app.worker.email_consumer import store_temp_email_body, upsert_email
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
@@ -58,6 +60,41 @@ async def sync_unread_emails(payload: EmailSyncRequest, access_cookie: str | Non
         detail_failed_count=inbox_result["detail_failed_count"],
         published_count=published_count,
         topic=kafka_email_producer.topic,
+    )
+
+
+@router.post("/sync-nokaf", response_model=EmailSyncResponse, summary="받은편지함 메일 동기화(Kafka 미사용)")
+async def sync_unread_emails_without_kafka(payload: EmailSyncRequest, access_cookie: str | None = Cookie(default=None, alias=settings.auth_access_cookie_name)) -> EmailSyncResponse:
+    access_token = _resolve_access_token(payload.access_token, access_cookie)
+    inbox_result = await gmail_service.fetch_unread_emails(access_token=access_token, user_id=payload.user_id, max_results=payload.max_results)
+    inbox_emails = inbox_result["emails"]
+
+    pool = get_db_pool()
+    saved_count = 0
+    failed_count = 0
+    temp_keys: list[str] = []
+    try:
+        for email in inbox_emails:
+            email["account_id"] = payload.account_id
+            try:
+                temp_key = await store_temp_email_body(email)
+                temp_keys.append(temp_key)
+                analysis = email_analyzer.analyze_email_rules(email)
+                if analysis.get("category") == "other" and settings.gemini_enabled:
+                    analysis = await email_analyzer.analyze_email(email)
+                await upsert_email(pool, email, analysis)
+                saved_count += 1
+            except Exception:
+                failed_count += 1
+    finally:
+        for temp_key in temp_keys:
+            await redis_temp_body_store.delete(temp_key)
+
+    return EmailSyncResponse(
+        fetched_count=inbox_result["message_id_count"],
+        detail_failed_count=inbox_result["detail_failed_count"] + failed_count,
+        published_count=saved_count,
+        topic="direct-db",
     )
 
 
